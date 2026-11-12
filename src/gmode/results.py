@@ -5,6 +5,7 @@ the free-space impedance (H_stored = eta0 * H), so E and H share units. Each
 mode is normalized to unit power, 0.5 * Re integral (E x H*) . z dA = 1.
 """
 from dataclasses import dataclass, field
+from typing import Optional
 
 import numpy as np
 
@@ -24,6 +25,10 @@ class Mode:
     E: np.ndarray  # (3, Nx, Ny) complex: Ex, Ey, Ez
     H: np.ndarray  # (3, Nx, Ny) complex: eta0 * (Hx, Hy, Hz)
     eps: np.ndarray  # (Nx, Ny) complex permittivity at the sample points
+    # (Nx, Ny) d(omega*eps)/d(omega) at the sample points; None means non-dispersive (= eps)
+    eps_group: Optional[np.ndarray] = None
+    # group index computed by the backend on its own grid; None falls back to the cell-centre estimate
+    ng: Optional[float] = None
     meta: dict = field(default_factory=dict)
 
     @property
@@ -70,8 +75,17 @@ class Mode:
 
     @property
     def group_index(self) -> float:
-        """Energy velocity group index; exact for lossless, non-dispersive materials."""
-        U = self.integrate(np.real(self.eps) * np.sum(np.abs(self.E) ** 2, 0) + np.sum(np.abs(self.H) ** 2, 0))
+        """c / v_g from the energy velocity, including material dispersion.
+
+        n_g = integral(Re[d(omega eps)/d(omega)] |E|^2 + |H|^2) / (4 P). For lossless
+        materials this equals d(k0 neff)/d(k0) exactly (Hellmann-Feynman), so it
+        accounts for both waveguide and material dispersion from a single solve.
+        With absorbing materials it is an approximation.
+        """
+        if self.ng is not None:
+            return self.ng
+        eps_g = self.eps if self.eps_group is None else self.eps_group
+        U = self.integrate(np.real(eps_g) * np.sum(np.abs(self.E) ** 2, 0) + np.sum(np.abs(self.H) ** 2, 0))
         return np.real(U) / (4 * self.power)
 
     def __repr__(self):

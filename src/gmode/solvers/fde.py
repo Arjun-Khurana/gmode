@@ -20,7 +20,7 @@ import pymetis
 import scipy.sparse as sp
 from scipy.sparse.linalg import LinearOperator, eigs, splu
 
-from ..grid import Axis, Grid, build_axis, rasterize
+from ..grid import Axis, Grid, build_axis, rasterize, rasterize_group
 from ..project import Project
 from ..results import Mode, ModeSet
 
@@ -124,6 +124,40 @@ _PARITY = {
 }
 
 
+def _dual_widths(axis: Axis):
+    """Integration widths for (node, half-point) samples along one axis.
+
+    A node on a non-periodic, non-PML lower wall (domain edge or symmetry plane)
+    only has half of its cell inside the solved region.
+    """
+    w_node = axis.d_bwd.copy()
+    if axis.lower in ("pec", "pmc"):
+        w_node[0] *= 0.5
+    return w_node, axis.d_fwd
+
+
+def _yee_group_index(grid: Grid, f, eps_group) -> float:
+    """c / v_g from the energy and power on the Yee grid itself.
+
+    Uses each component at its own location and the same interface-averaged
+    permittivities as the operator, so it agrees with d(k0 neff)/d(k0) of the
+    discrete problem far more closely than the cell-centre estimate on coarse meshes.
+    """
+    ex, ey, ez, hx, hy, hz = f
+    gx_n, gx_h = _dual_widths(grid.x)
+    gy_n, gy_h = _dual_widths(grid.y)
+    w_hn = np.outer(gx_h, gy_n)  # Ex, Hy at (xh, y)
+    w_nh = np.outer(gx_n, gy_h)  # Ey, Hx at (x, yh)
+    w_nn = np.outer(gx_n, gy_n)  # Ez at (x, y)
+    w_hh = np.outer(gx_h, gy_h)  # Hz at (xh, yh)
+    egx, egy, egz = (np.real(e) for e in eps_group)
+    a2 = lambda a: np.abs(a) ** 2
+    U = np.sum(w_hn * (egx * a2(ex) + a2(hy)) + w_nh * (egy * a2(ey) + a2(hx))
+               + w_nn * egz * a2(ez) + w_hh * a2(hz))
+    P = np.real(np.sum(w_hn * ex * np.conj(hy)) - np.sum(w_nh * ey * np.conj(hx)))
+    return float(U / (2 * P))
+
+
 class FDESolver:
     name = "fde"
 
@@ -135,6 +169,7 @@ class FDESolver:
         k0 = 2 * np.pi / project.wavelength
 
         eps_x, eps_y, eps_z = rasterize(project, grid)
+        eps_group = rasterize_group(project, grid, (eps_x, eps_y, eps_z))
 
         dxf, dxb = _derivatives(grid.x)
         dyf, dyb = _derivatives(grid.y)
@@ -170,13 +205,13 @@ class FDESolver:
 
         neffs = np.sqrt(vals.astype(complex))
         order = np.argsort(-neffs.real)
-        modes = [self._fields(project, grid, eps_z, Q, Dxf, Dxb, Dyf, Dyb, neffs[i], vecs[:, i])
+        modes = [self._fields(project, grid, eps_z, eps_group, Q, Dxf, Dxb, Dyf, Dyb, neffs[i], vecs[:, i])
                  for i in order]
         for m in modes:
             m.meta.update(backend="fde", grid_shape=grid.shape, solve_time=t_eig)
         return ModeSet(modes, project.model_copy(deep=True), "fde")
 
-    def _fields(self, project, grid, eps_z, Q, Dxf, Dxb, Dyf, Dyb, neff, e):
+    def _fields(self, project, grid, eps_z, eps_group, Q, Dxf, Dxb, Dyf, Dyb, neff, e):
         nx, ny = grid.shape
         N = nx * ny
         h = Q @ e / neff
@@ -185,6 +220,7 @@ class FDESolver:
         ez = 1j * (Dxb @ hy - Dyb @ hx) / eps_z.ravel()
         hz = -1j * (Dxf @ ey - Dyf @ ex)
         f = [a.reshape(nx, ny) for a in (ex, ey, ez, hx, hy, hz)]
+        ng = _yee_group_index(grid, f, eps_group)
 
         # interpolate everything to cell centres (xh, yh)
         gx, gy = grid.x, grid.y
@@ -209,6 +245,7 @@ class FDESolver:
             else:
                 y, dy = np.concatenate([2 * c - y[::-1], y]), np.concatenate([dy[::-1], dy])
 
-        eps = project.eps_at(x[:, None], y[None, :])
+        X, Y = x[:, None], y[None, :]
         return Mode(neff=complex(neff), wavelength=project.wavelength, x=x, y=y, dx=dx, dy=dy,
-                    E=np.array(comps[:3]), H=np.array(comps[3:]), eps=eps).normalize()
+                    E=np.array(comps[:3]), H=np.array(comps[3:]), eps=project.eps_at(X, Y),
+                    eps_group=project.group_eps_at(X, Y), ng=ng).normalize()

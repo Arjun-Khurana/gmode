@@ -26,17 +26,17 @@ def slab_project(n_core, n_clad, t, dy=0.005, half_height=1.5, **kw):
     )
 
 
-def analytic_slab(n1, n2, t, pol):
+def analytic_slab(n1, n2, t, pol, k0=K0):
     """Fundamental mode of a symmetric slab; complex n1 allowed."""
     def f(n, n1=n1):
         r = 1 if pol == "te" else n1**2 / n2**2
-        kappa = K0 * np.sqrt(n1**2 - n**2 + 0j)
-        gamma = K0 * np.sqrt(n**2 - n2**2 + 0j)
+        kappa = k0 * np.sqrt(n1**2 - n**2 + 0j)
+        gamma = k0 * np.sqrt(n**2 - n2**2 + 0j)
         return kappa * np.tan(kappa * t / 2) - r * gamma
 
     # bracket the fundamental (kappa * t / 2 < pi / 2) of the lossless slab, then follow it into loss
     n1r = np.real(n1)
-    lo = max(n2, np.sqrt(max(n1r**2 - (np.pi / (K0 * t)) ** 2, 0))) + 1e-9
+    lo = max(n2, np.sqrt(max(n1r**2 - (np.pi / (k0 * t)) ** 2, 0))) + 1e-9
     n0 = brentq(lambda n: f(n, n1r).real, lo, n1r - 1e-9)
     if np.imag(n1) == 0:
         return n0
@@ -142,6 +142,70 @@ def test_si_wire_te0_matches_mpb_reference():
     assert m.neff.real == pytest.approx(2.16479, abs=1e-3)
     assert m.group_index == pytest.approx(3.8982, rel=3e-3)
     assert m.te_fraction > 0.95
+
+
+@pytest.mark.parametrize("pol", ["te", "tm"])
+def test_dispersive_slab_group_index_matches_analytic(pol):
+    """Si slab in SiO2 with Sellmeier materials: n_g from one solve vs d(k0 neff)/d(k0) of the exact solution."""
+    si, sio2, t = gm.material("Si"), gm.material("SiO2"), 0.22
+
+    def exact(wl):
+        return analytic_slab(si.index(wl).real, sio2.index(wl).real, t, pol, k0=2 * np.pi / wl)
+
+    h = 1e-4
+    ng_exact = exact(WL) - WL * (exact(WL + h) - exact(WL - h)) / (2 * h)
+    p = slab_project(3.0, 1.4, t)
+    p.materials = {"core": si, "clad": sio2}
+    ms = p.solve()
+    m = te_mode(ms) if pol == "te" else tm_mode(ms)
+    assert m.neff.real == pytest.approx(exact(WL), abs=1e-3)
+    assert m.group_index == pytest.approx(ng_exact, rel=2e-3)
+    # material dispersion is a large part of n_g here
+    assert ng_exact - m.neff.real > 0.5
+
+
+@pytest.mark.parametrize("materials", [{"Si": "Si", "SiO2": "SiO2"}, mats(Si=3.476, SiO2=1.444)])
+def test_group_index_equals_discrete_dispersion(materials):
+    """The Yee-grid energy n_g is the exact derivative of the discrete neff, even on a coarse mesh."""
+    def solve(wl):
+        p = si_wire(dx=0.04, x_symmetry="pec", y_symmetry="pmc")
+        p.wavelength, p.materials = wl, materials
+        return p.solve()[0]
+
+    h = 2e-3
+    m = solve(WL)
+    ng_fd = m.neff.real - WL * (solve(WL + h).neff.real - solve(WL - h).neff.real) / (2 * h)
+    assert m.group_index == pytest.approx(ng_fd, rel=1e-5)
+
+
+def test_pml_has_no_spurious_modes_above_cladding():
+    """With PML on all sides, the modes found above the cladding index are exactly the guided ones.
+
+    A purely imaginary stretch (pml_kappa=0) puts a band of PML modes with Re(neff) > n_clad
+    around the target, which displaced the guided modes and slowed the eigensolver ~10x.
+    """
+    pml = dict(x_min="pml", x_max="pml", y_min="pml", y_max="pml")
+    n_clad = 1.444
+    box = si_wire(dx=0.04)
+    box.solver.num_modes = 4
+    guided = [m.neff.real for m in box.solve() if m.neff.real > n_clad + 0.01]
+    assert len(guided) == 2  # TE0 and TM0
+
+    p = si_wire(dx=0.04, **pml)
+    p.solver.num_modes = 4
+    above = [m for m in p.solve() if m.neff.real > n_clad + 0.01]
+    assert len(above) == len(guided)
+    assert all(abs(m.neff.imag) < 1e-6 for m in above)
+    assert above[0].neff.real == pytest.approx(guided[0], abs=1e-5)  # TE0 is well confined
+    # TM0 sits near cutoff and feels the PEC box walls, so only loose agreement is expected
+    assert above[1].neff.real == pytest.approx(guided[1], abs=1e-2)
+
+    # the property that rules them out: Re(s) >= Im(s) everywhere, so Re(1/s^2) >= 0
+    from gmode.grid import build_axis
+    for ax in "xy":
+        a = build_axis(p, ax)
+        for s in (a.s_nodes, a.s_half):
+            assert np.all(s.real >= s.imag) and s.imag.max() > 1
 
 
 def test_project_json_roundtrip(tmp_path):

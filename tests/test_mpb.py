@@ -41,3 +41,14 @@ def test_mpb_rejects_lossy_materials():
     p.materials["Si"] = gm.ConstantMaterial(n=3.476, k=0.01)
     with pytest.raises(ValueError, match="lossless"):
         p.solve()
+
+
+def test_dispersive_group_index_agrees():
+    """Both backends include material dispersion in n_g."""
+    fde, mpb = si_wire("fde"), si_wire("mpb")
+    for p in (fde, mpb):
+        p.materials = {"Si": gm.material("Si"), "SiO2": gm.material("SiO2")}
+    a, b = fde.solve()[0], mpb.solve()[0]
+    assert a.neff.real == pytest.approx(b.neff.real, abs=2e-3)
+    assert a.group_index == pytest.approx(b.group_index, rel=5e-3)
+    assert a.group_index > 4.0  # vs ~3.9 without material dispersion

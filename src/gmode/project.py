@@ -1,12 +1,13 @@
 """Project: everything needed to define and reproduce a mode solve. Serializes to JSON."""
+import warnings
 from pathlib import Path
 from typing import Literal, Optional
 
 import numpy as np
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .geometry import Structure
-from .materials import Material
+from .materials import Material, material
 
 BoundaryType = Literal["pml", "pec", "pmc", "periodic"]
 SymmetryType = Literal["none", "pec", "pmc"]
@@ -48,9 +49,12 @@ class Boundaries(BaseModel):
     y_symmetry: SymmetryType = "none"
     pml_layers: int = Field(20, ge=1)
     pml_order: int = 3
-    # peak of the coordinate stretch s = 1 + i*sigma*(depth/thickness)^order;
-    # None picks a value for ~1e-6 normal-incidence reflection
+    # coordinate stretch s = 1 + (kappa + i*sigma) * (depth/thickness)^order.
+    # sigma (absorption): None picks a value for ~1e-6 normal-incidence reflection.
+    # kappa (real stretch, damps evanescent tails): None uses kappa = sigma, which
+    # keeps spurious PML modes below the local material index.
     pml_sigma: Optional[float] = None
+    pml_kappa: Optional[float] = Field(None, ge=0)
 
     @model_validator(mode="after")
     def _check(self):
@@ -71,6 +75,9 @@ class SolverSettings(BaseModel):
 
 
 class Project(BaseModel):
+    # re-validate on attribute assignment, so p.materials = {"core": "Si"} resolves library names
+    model_config = ConfigDict(validate_assignment=True)
+
     schema_version: int = SCHEMA_VERSION
     name: str = "untitled"
     wavelength: float = Field(1.55, gt=0)
@@ -83,6 +90,14 @@ class Project(BaseModel):
     boundaries: Boundaries = Boundaries()
     solver: SolverSettings = SolverSettings()
 
+    @field_validator("materials", mode="before")
+    @classmethod
+    def _resolve_library_names(cls, v):
+        """Allow {"core": "Si"} as shorthand for {"core": gm.material("Si")}."""
+        if isinstance(v, dict):
+            return {k: (material(m) if isinstance(m, str) else m) for k, m in v.items()}
+        return v
+
     @model_validator(mode="after")
     def _check_materials(self):
         for name in [self.background] + [s.material for s in self.structures]:
@@ -90,18 +105,42 @@ class Project(BaseModel):
                 raise ValueError(f"unknown material {name!r}")
         return self
 
+    def _used_materials(self) -> list[str]:
+        return list(dict.fromkeys([self.background] + [s.material for s in self.structures]))
+
+    def _paint(self, x, y, values: dict) -> np.ndarray:
+        x, y = np.broadcast_arrays(np.asarray(x, float), np.asarray(y, float))
+        out = np.full(x.shape, values[self.background], dtype=complex)
+        for s in self.structures:
+            out[s.contains(x, y)] = values[s.material]
+        return out
+
     def eps_at(self, x, y, wavelength: Optional[float] = None) -> np.ndarray:
         """Relative permittivity sampled at points (no interface averaging)."""
         wl = self.wavelength if wavelength is None else wavelength
-        x, y = np.broadcast_arrays(np.asarray(x, float), np.asarray(y, float))
-        eps = np.full(x.shape, self.materials[self.background].eps(wl), dtype=complex)
-        for s in self.structures:
-            eps[s.contains(x, y)] = self.materials[s.material].eps(wl)
-        return eps
+        return self._paint(x, y, {k: complex(self.materials[k].eps(wl)) for k in self._used_materials()})
+
+    def group_eps_at(self, x, y, wavelength: Optional[float] = None) -> np.ndarray:
+        """d(omega*eps)/d(omega) sampled at points; equals eps_at for non-dispersive materials."""
+        wl = self.wavelength if wavelength is None else wavelength
+        return self._paint(x, y, {k: complex(self.materials[k].group_eps(wl)) for k in self._used_materials()})
+
+    def range_warnings(self, wavelength: Optional[float] = None) -> list[str]:
+        """Materials used outside the wavelength range their model is valid for."""
+        wl = self.wavelength if wavelength is None else wavelength
+        msgs = []
+        for k in self._used_materials():
+            m = self.materials[k]
+            if not m.in_range(wl):
+                lo, hi = m.valid_range()
+                msgs.append(f"material {k!r} is only valid for {lo:g}-{hi:g} um; extrapolating to {wl:g} um")
+        return msgs
 
     def solve(self):
         from .solvers import get_solver
 
+        for msg in self.range_warnings():
+            warnings.warn(msg, stacklevel=2)
         return get_solver(self.solver.backend).solve(self)
 
     def save(self, path) -> None:

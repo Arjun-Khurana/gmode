@@ -1,5 +1,9 @@
 """MPB backend (plane-wave expansion, periodic cell, lossless materials only).
 
+MPB is non-dispersive, but each solve is at a single wavelength, so materials are
+evaluated there. The group index still includes material dispersion, because it
+is computed from the fields with d(omega*eps)/d(omega).
+
 Needs the meep python package, which is not on PyPI: install gmode into an
 environment that already has meep (e.g. `uv pip install -e . --python <meep venv>`).
 """
@@ -28,8 +32,10 @@ class MPBSolver:
         (cx, cy), (Lx, Ly) = project.domain.center, project.domain.size
         resolution = 1 / min(project.mesh.dx, project.mesh.dy)
 
+        eps = {k: float(np.real(project.materials[k].eps(wl))) for k in project._used_materials()}
+
         def medium(name):
-            return mp.Medium(index=project.materials[name].n)
+            return mp.Medium(epsilon=eps[name])
 
         geometry = []
         for s in project.structures:
@@ -51,7 +57,7 @@ class MPBSolver:
             num_bands=project.solver.num_modes,
         )
 
-        indices = [project.materials[n].n for n in {project.background, *(s.material for s in project.structures)}]
+        indices = [np.sqrt(eps[k]) for k in {project.background, *(s.material for s in project.structures)}]
         n_guess = project.solver.target_neff or 0.9 * max(indices)
         t0 = time.perf_counter()
         modes = []
@@ -71,6 +77,7 @@ class MPBSolver:
                 dx=np.full(nx, Lx / nx), dy=np.full(ny, Ly / ny),
                 E=np.moveaxis(E, -1, 0), H=np.moveaxis(H, -1, 0),
                 eps=project.eps_at(x[:, None], y[None, :]),
+                eps_group=project.group_eps_at(x[:, None], y[None, :]),
             ).normalize())
         for m in modes:
             m.meta.update(backend="mpb", grid_shape=m.eps.shape, solve_time=time.perf_counter() - t0)
@@ -78,7 +85,7 @@ class MPBSolver:
 
     @staticmethod
     def _check(project: Project):
-        if any(not m.lossless for m in project.materials.values()):
+        if any(np.imag(project.materials[k].eps(project.wavelength)) != 0 for k in project._used_materials()):
             raise ValueError("MPB only supports lossless materials; use the fde backend")
         b = project.boundaries
         if {b.x_min, b.x_max, b.y_min, b.y_max} != {"periodic"}:
