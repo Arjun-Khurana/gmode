@@ -74,6 +74,21 @@ class SolverSettings(BaseModel):
     target_neff: Optional[float] = None
 
 
+class SweepSettings(BaseModel):
+    """What the GUI's sweep panel runs; scripts call gmode.sweep() directly."""
+
+    parameter: str = "wavelength"
+    start: float = 1.5
+    stop: float = 1.6
+    steps: int = Field(11, ge=2)
+    extra_modes: int = Field(2, ge=0)
+    keep_fields: bool = True
+
+    @property
+    def values(self):
+        return np.linspace(self.start, self.stop, self.steps)
+
+
 class Project(BaseModel):
     # re-validate on attribute assignment, so p.materials = {"core": "Si"} resolves library names
     model_config = ConfigDict(validate_assignment=True)
@@ -89,6 +104,7 @@ class Project(BaseModel):
     mesh: Mesh = Mesh()
     boundaries: Boundaries = Boundaries()
     solver: SolverSettings = SolverSettings()
+    sweep: SweepSettings = SweepSettings()
 
     @field_validator("materials", mode="before")
     @classmethod

@@ -234,3 +234,72 @@ def test_destroying_document_with_unsaved_changes_is_quiet(qtbot):
     with qtbot.captureExceptions() as exceptions:
         Shiboken.delete(doc)
     assert not exceptions, exceptions[0][1]
+
+
+def test_sweep_view_runs_tracks_and_opens_points(window, qtbot):
+    w, doc = window, window.doc
+    doc.add_material("Si", gm.material("Si"))
+    doc.add_structure(gm.Rectangle(name="core", material="Si", size=(0.5, 0.22)))
+    from gmode.gui.sweep import sweep_parameters
+
+    paths = dict(sweep_parameters(doc.project))
+    assert paths["core width"] == "structures.core.size.0" and paths["wavelength"] == "wavelength"
+
+    w.show_sweep()
+    assert w.sweep_section.isVisible()
+    setup = w.sweep_setup
+    setup.param.setCurrentText("core width")
+    setup._param_picked(setup.param.currentIndex())
+    assert doc.project.sweep.parameter == "structures.core.size.0"
+    assert (doc.project.sweep.start, doc.project.sweep.stop) == pytest.approx((0.4, 0.6))
+    setup.steps.setValue(4)
+    assert doc.project.sweep.steps == 4
+    w.act_undo.trigger()
+    assert doc.project.sweep.steps == 11  # sweep settings are undoable project edits
+    w.act_redo.trigger()
+
+    w.act_sweep.trigger()
+    qtbot.waitUntil(lambda: w.sweep_result is not None, timeout=120_000)
+    r = w.sweep_result
+    assert r.neff.shape == (4, 2) and np.all(np.isfinite(r.neff))
+    assert len(w.sweep_view._curves) == 2
+    assert not w.sweep_view.quantity.buttons["D"].isEnabled()  # not a wavelength sweep
+    for q in ("n_g", "loss", "TE", "A_eff", "n_eff"):
+        w.sweep_view.quantity.setCurrentText(q)
+        assert len(w.sweep_view._curves) == 2
+
+    w._sweep_point(2, 1)
+    assert w.showing_fields and doc.results is r.steps[2]
+    assert w.viewer.index == r.assignments[2][1]
+    assert "sweep step 2" in w.status.text()
+
+
+def test_sweep_runner_pool_and_cancel(qtbot):
+    """The real runner: steps on a pool of worker processes, tracked in order, cancellable."""
+    from gmode.gui.sweep import SweepRunner
+
+    p = gm.Project(materials={"Si": "Si", "SiO2": "SiO2"}, background="SiO2",
+                   structures=[gm.Rectangle(name="core", material="Si", size=(0.5, 0.22))],
+                   domain=gm.Domain(size=(2.0, 1.5)), mesh=gm.Mesh(dx=0.04, dy=0.04),
+                   solver=gm.SolverSettings(num_modes=1),
+                   sweep=gm.SweepSettings(parameter="wavelength", start=1.5, stop=1.6, steps=5))
+    r = SweepRunner(workers=2)
+    try:
+        updates = []
+        r.updated.connect(lambda res: updates.append(len(res.values)))
+        with qtbot.waitSignal(r.finished, timeout=120_000) as sig:
+            r.run(p)
+        result, warnings = sig.args
+        serial = gm.sweep(p, "wavelength", p.sweep.values, workers=1)
+        assert result.neff == pytest.approx(serial.neff, abs=1e-10)
+        assert updates == sorted(updates) and updates[-1] == 5
+        assert result.dispersion().shape == (5, 1)
+
+        big = p.model_copy(update={"mesh": gm.Mesh(dx=0.005, dy=0.005)})
+        with qtbot.waitSignal(r.cancelled, timeout=10_000):
+            r.run(big)
+            qtbot.wait(300)
+            r.cancel()
+        assert not r.busy
+    finally:
+        r.shutdown()

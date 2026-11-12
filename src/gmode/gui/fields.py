@@ -91,6 +91,7 @@ class FieldViewer(QWidget):
         bar = QHBoxLayout(self.controls)
         bar.setContentsMargins(0, 0, 0, 0)
         bar.setSpacing(6)
+        bar.addStretch()
         for w in (self.component, self.part, self.log, self.outline):
             w.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
             bar.addWidget(w)

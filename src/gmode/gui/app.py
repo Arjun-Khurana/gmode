@@ -1,5 +1,6 @@
 """GMode main window: project panel | stage | solve and properties."""
 import sys
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt, QTimer
@@ -18,6 +19,7 @@ from .document import ProjectDocument, default_project
 from .fields import FieldViewer, ModeTable
 from .inspector import InspectorPanel
 from .solver import SolveRunner
+from .sweep import SweepRunner, SweepSetup, SweepView
 from .tree import ProjectTree
 from .widgets import ModeList, ModeReadout, Section, Segmented, toggle
 
@@ -27,6 +29,8 @@ _MAX_RECENT = 8
 HINT_GEOMETRY = ("<b>drag</b> move  ·  <b>handles</b> resize  ·  <b>R C T P</b> add shape  ·  "
                  "<b>F</b> fit  ·  <b>F5</b> solve")
 HINT_FIELDS = "<b>click</b> a mode on the right  ·  <b>scroll</b> zoom  ·  <b>drag</b> pan  ·  <b>F5</b> solve"
+HINT_SWEEP = ("<b>click</b> a point to view its modes  ·  <b>scroll</b> zoom  ·  <b>F6</b> run sweep  ·  "
+              "<b>esc</b> stop")
 
 
 def _hint(text):
@@ -38,7 +42,8 @@ def _hint(text):
 class SolveButton(QPushButton):
     """The main action: big, filled, with its key on the right."""
 
-    def __init__(self):
+    def __init__(self, text="SOLVE", key="F5"):
+        self.text_idle, self.key_idle = text, key
         super().__init__()
         self.setObjectName("primary")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -60,8 +65,8 @@ class SolveButton(QPushButton):
         self.set_running(False)
 
     def set_running(self, running: bool):
-        self.label.setText("CANCEL" if running else "SOLVE")
-        self.key.setText("esc" if running else "F5")
+        self.label.setText("CANCEL" if running else self.text_idle)
+        self.key.setText("esc" if running else self.key_idle)
         color = theme.ACCENT_INK if running else theme.INK
         self.label.setStyleSheet(f"color: {color}; background: transparent;")
         self.key.setStyleSheet(f"color: {color}; background: transparent;")
@@ -77,10 +82,14 @@ class MainWindow(QMainWindow):
         self.doc = doc or ProjectDocument()
         self.settings = settings or QSettings("GMode", "GMode")
         self.runner = SolveRunner(self, in_process=in_process_solver)
+        self.sweeper = SweepRunner(self, in_process=in_process_solver)
+        self.sweep_result = None
         self.resize(1440, 880)
 
         self.canvas = GeometryCanvas(self.doc)
         self.viewer = FieldViewer()
+        self.sweep_view = SweepView()
+        self.sweep_setup = SweepSetup(self.doc)
         self.tree = ProjectTree(self.doc)
         self.inspector = InspectorPanel(self.doc)
         self.modes_list = ModeList()
@@ -192,7 +201,7 @@ class MainWindow(QMainWindow):
         bl = QHBoxLayout(bar)
         bl.setContentsMargins(0, 0, 0, 0)
         bl.setSpacing(8)
-        self.view_seg = Segmented(["Geometry", "Fields"])
+        self.view_seg = Segmented(["Geometry", "Fields", "Sweep"])
         bl.addWidget(self.view_seg)
         bl.addStretch()
 
@@ -215,6 +224,7 @@ class MainWindow(QMainWindow):
         self.bar_stack = QStackedWidget()
         self.bar_stack.addWidget(geo)
         self.bar_stack.addWidget(self.viewer.controls)
+        self.bar_stack.addWidget(self.sweep_view.controls)
         self.bar_stack.setStyleSheet(f"background: {theme.BG};")
         bl.addWidget(self.bar_stack)
         lay.addWidget(bar)
@@ -222,6 +232,7 @@ class MainWindow(QMainWindow):
         self.stage_stack = QStackedWidget()
         self.stage_stack.addWidget(self.canvas)
         self.stage_stack.addWidget(self.viewer)
+        self.stage_stack.addWidget(self.sweep_view)
         lay.addWidget(self.stage_stack, 1)
         self.hint = _hint(HINT_GEOMETRY)
         lay.addWidget(self.hint)
@@ -243,6 +254,19 @@ class MainWindow(QMainWindow):
         self.stale_label.setWordWrap(True)
         lay.addWidget(self.status)
         lay.addWidget(self.stale_label)
+
+        self.sweep_section = Section("Sweep")
+        self.sweep_section.add(self.sweep_setup)
+        self.sweep_btn = SolveButton("SWEEP", "F6")
+        self.sweep_btn.setMinimumHeight(44)
+        self.sweep_btn.clicked.connect(lambda: self.sweeper.cancel() if self.sweeper.busy else self.run_sweep())
+        self.sweep_section.add(self.sweep_btn)
+        self.sweep_status = QLabel("")
+        self.sweep_status.setObjectName("status")
+        self.sweep_status.setWordWrap(True)
+        self.sweep_section.add(self.sweep_status)
+        self.sweep_section.hide()
+        lay.addWidget(self.sweep_section)
 
         modes = Section("Modes")
         self.modes_hint = QLabel("press solve to find modes")
@@ -268,17 +292,20 @@ class MainWindow(QMainWindow):
         return scroll
 
     def _switch_view(self, name):
-        fields = name == "Fields"
-        self.stage_stack.setCurrentIndex(1 if fields else 0)
-        self.bar_stack.setCurrentIndex(1 if fields else 0)
-        new = _hint(HINT_FIELDS if fields else HINT_GEOMETRY)
-        self.hint.setText(new.text())
+        i = ["Geometry", "Fields", "Sweep"].index(name)
+        self.stage_stack.setCurrentIndex(i)
+        self.bar_stack.setCurrentIndex(i)
+        self.hint.setText(_hint((HINT_GEOMETRY, HINT_FIELDS, HINT_SWEEP)[i]).text())
+        self.sweep_section.setVisible(name == "Sweep")
 
     def show_fields(self):
         self.view_seg.setCurrentText("Fields")
 
     def show_geometry(self):
         self.view_seg.setCurrentText("Geometry")
+
+    def show_sweep(self):
+        self.view_seg.setCurrentText("Sweep")
 
     @property
     def showing_fields(self) -> bool:
@@ -317,11 +344,13 @@ class MainWindow(QMainWindow):
         self.act_mat_const = self._action("Constant-index material...", lambda: self.add_material("constant"))
         self.act_mat_file = self._action("Import n,k file...", lambda: self.add_material("file"))
         self.act_solve = self._action("Solve", self.solve, "F5", "Find modes")
-        self.act_cancel = self._action("Cancel solve", self.runner.cancel, "Esc")
+        self.act_sweep = self._action("Run sweep", self.run_sweep, "F6", "Solve at every sweep value and track modes")
+        self.act_cancel = self._action("Cancel", self.cancel_running, "Esc")
         self.act_cancel.setEnabled(False)
         self.act_fit = self._action("Fit to domain", self.canvas.fit, "F")
         self.act_geometry = self._action("Geometry", self.show_geometry, "Ctrl+1")
         self.act_fields = self._action("Fields", self.show_fields, "Ctrl+2")
+        self.act_sweep_view = self._action("Sweep", self.show_sweep, "Ctrl+3")
 
         mb = self.menuBar()
         m = mb.addMenu("&File")
@@ -342,9 +371,10 @@ class MainWindow(QMainWindow):
             m.addSeparator() if a is None else m.addAction(a)
         m = mb.addMenu("&Simulate")
         m.addAction(self.act_solve)
+        m.addAction(self.act_sweep)
         m.addAction(self.act_cancel)
         self.view_menu = mb.addMenu("&View")
-        for a in (self.act_geometry, self.act_fields, self.act_fit):
+        for a in (self.act_geometry, self.act_fields, self.act_sweep_view, self.act_fit):
             self.view_menu.addAction(a)
         self.view_menu.addSeparator()
         self._rebuild_recent()
@@ -364,6 +394,13 @@ class MainWindow(QMainWindow):
         r.finished.connect(self._solve_finished)
         r.failed.connect(self._solve_failed)
         r.cancelled.connect(self._solve_cancelled)
+        sw = self.sweeper
+        sw.progress.connect(self._sweep_progress)
+        sw.updated.connect(self.sweep_view.set_result)
+        sw.finished.connect(self._sweep_finished)
+        sw.failed.connect(self._sweep_failed)
+        sw.cancelled.connect(self._sweep_cancelled)
+        self.sweep_view.pointClicked.connect(self._sweep_point)
 
     def _select_mode(self, i):
         res = self.doc.results
@@ -523,6 +560,83 @@ class MainWindow(QMainWindow):
     def solve(self):
         self.runner.solve(self.doc.project)
 
+    def cancel_running(self):
+        self.runner.cancel()
+        self.sweeper.cancel()
+
+    # ---- sweeps ---------------------------------------------------------------------------
+    def run_sweep(self):
+        if self.sweeper.busy or self.runner.busy:
+            return
+        self.show_sweep()
+        try:
+            self.sweeper.run(self.doc.project)
+        except ValueError as e:  # e.g. a sweep value the project rejects, like a negative width
+            QMessageBox.warning(self, "Cannot run sweep", str(e))
+
+    def _sweep_progress(self, done, total):
+        if done == 0:
+            st = self.doc.project.sweep
+            self.sweep_btn.set_running(True)
+            self.act_solve.setEnabled(False)
+            self.act_sweep.setEnabled(False)
+            self.act_cancel.setEnabled(True)
+            self.sweep_view.set_result(None)
+            self.sweep_view.progress.setRange(0, total)
+            self.sweep_view.progress.show()
+            from gmode.sweep import parameter_label
+
+            self.log_message(f"sweep: {parameter_label(st.parameter)} from {st.start:g} to {st.stop:g}, "
+                             f"{total} steps")
+        self.sweep_view.progress.setValue(done)
+        self.sweep_status.setText(f"step {done} of {total}  ·  {self.sweeper.elapsed():.1f} s")
+
+    def _sweep_done(self):
+        self.sweep_btn.set_running(False)
+        self.act_solve.setEnabled(True)
+        self.act_sweep.setEnabled(True)
+        self.act_cancel.setEnabled(False)
+        self.sweep_view.progress.hide()
+
+    def _sweep_finished(self, result, warnings):
+        self._sweep_done()
+        self.sweep_result = result
+        self.sweep_view.set_result(result)
+        for w in warnings:
+            self.log_message(f"warning: {w}")
+        t = self.sweeper.elapsed() or (time.perf_counter() - self.sweeper.t_start)
+        kept = "  ·  click a point for its fields" if result.steps else ""
+        self.sweep_status.setText(f"{len(result.values)} steps  ·  {t:.1f} s{kept}")
+        self.log_message(f"sweep finished in {t:.1f} s\n{result.table()}")
+
+    def _sweep_failed(self, message, tb):
+        self._sweep_done()
+        self.sweep_status.setText("sweep failed (see log)")
+        self.log_message(f"sweep failed: {message}\n{tb}".rstrip())
+        QMessageBox.warning(self, "Sweep failed", message)
+
+    def _sweep_cancelled(self, partial):
+        self._sweep_done()
+        self.sweep_result = partial
+        self.sweep_view.set_result(partial)
+        self.sweep_status.setText(f"stopped after {len(partial.values)} steps")
+        self.log_message("sweep stopped")
+
+    def _sweep_point(self, step, track):
+        r = self.sweep_result
+        if r is None:
+            return
+        value = f"{r.label.rsplit(' (', 1)[0]} = {r.values[step]:g}"
+        if not r.steps or r.steps[step] is None:
+            self.sweep_status.setText(f"{value}  ·  fields were not kept for this sweep")
+            return
+        j = r.assignments[step][track]
+        if j is None:
+            return
+        self.doc.set_results(r.steps[step])
+        self._select_mode(j)
+        self.status.setText(f"sweep step {step}  ·  {value}")
+
     def _solve_started(self):
         self.act_solve.setEnabled(False)
         self.act_cancel.setEnabled(True)
@@ -587,6 +701,7 @@ class MainWindow(QMainWindow):
             ev.ignore()
             return
         self.runner.shutdown()
+        self.sweeper.shutdown()
         self.settings.setValue("geometry", self.saveGeometry())
         ev.accept()
 

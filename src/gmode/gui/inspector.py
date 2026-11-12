@@ -28,7 +28,8 @@ LABELS = {
     "eps_inf": "ε∞", "poles": "Poles (eV)", "x": "Al fraction x", "wavelengths": "Wavelengths",
 }
 META_LAST = {"description", "reference", "wavelength_range"}
-HIDDEN = {"kind", "type", "schema_version", "materials", "structures", "domain", "mesh", "boundaries", "solver"}
+HIDDEN = {"kind", "type", "schema_version", "materials", "structures", "domain", "mesh", "boundaries", "solver",
+          "sweep"}
 
 
 def _fmt(v) -> str:

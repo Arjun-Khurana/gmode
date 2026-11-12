@@ -56,6 +56,40 @@ class Mode:
         Sz = self.E[0] * np.conj(self.H[1]) - self.E[1] * np.conj(self.H[0])
         return 0.5 * np.real(self.integrate(Sz))
 
+    def cross_power(self, other: "Mode") -> complex:
+        """0.5 * integral (E_self x H_other*) . z dA, with `other` resampled onto this grid if needed."""
+        E2, H2 = other.E, other.H
+        if other.E.shape != self.E.shape or not (np.allclose(other.x, self.x) and np.allclose(other.y, self.y)):
+            E2, H2 = other._resample(self.x, self.y)
+        Sz = self.E[0] * np.conj(H2[1]) - self.E[1] * np.conj(H2[0])
+        return 0.5 * self.integrate(Sz)
+
+    def overlap(self, other: "Mode") -> float:
+        """Power coupling between two modes, between 0 and 1 (1 for identical fields).
+
+        |<1,2>|·|<2,1>| / (<1,1>·<2,2>), with <a,b> = 0.5 * integral (E_a x H_b*) . z dA.
+        Insensitive to phase and normalization, so it identifies the same mode across sweep steps.
+        """
+        num = abs(self.cross_power(other)) * abs(other.cross_power(self))
+        den = abs(self.power) * abs(other.power)
+        # for lossy (non-orthogonal) modes the ratio can exceed 1 slightly
+        return float(min(num / den, 1.0)) if den > 0 else 0.0
+
+    def _resample(self, x, y):
+        from scipy.interpolate import RegularGridInterpolator
+
+        pts = np.stack(np.meshgrid(x, y, indexing="ij"), axis=-1)
+
+        def interp(F):
+            out = np.empty((3, len(x), len(y)), dtype=complex)
+            for c in range(3):
+                f = RegularGridInterpolator((self_x, self_y), F[c], bounds_error=False, fill_value=0.0)
+                out[c] = f(pts)
+            return out
+
+        self_x, self_y = self.x, self.y
+        return interp(self.E), interp(self.H)
+
     @property
     def loss_db_per_cm(self) -> float:
         return _DB * self.k0 * np.imag(self.neff) * 1e4

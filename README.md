@@ -55,6 +55,30 @@ print(modes.table())
 p.save("si_wire.json")
 ```
 
+## Sweeps
+
+```python
+import numpy as np
+
+# width sweep: modes are tracked by field overlap, so they keep their identity through crossings
+r = gm.sweep(p, "structures.core.size.0", np.linspace(0.4, 0.9, 26))
+r.neff[:, 1]           # mode 1 at every width (nan once it is cut off)
+r.te_fraction          # (steps, modes): polarization along each track
+print(r.table())
+
+# wavelength sweep: n_g per step (exact, with material dispersion) and the dispersion D
+r = gm.sweep(p, "wavelength", np.linspace(1.5, 1.6, 11))
+r.dispersion()         # ps/(nm km), from d n_g / d lambda
+```
+
+Any number in the project can be swept by its path: `wavelength`, `structures.<name>.size.0`
+(width), `structures.<name>.center.1`, `materials.<name>.n`, `domain.size.0`, or `mesh.step`
+(dx and dy, for convergence checks). A function `(project, value) -> project` works too.
+Steps run in parallel worker processes (one per core by default). Each step solves a couple of extra
+modes, so a tracked mode can't drop out of the search window when another mode crosses it. In the
+desktop app, the Sweep view (F6) plots any tracked quantity, and clicking a point opens that step's
+fields.
+
 ## Materials
 
 | Model | Use |
@@ -96,7 +120,7 @@ Lengths are in microns. Time dependence is exp(-iωt), so loss appears as Im(nef
 | M1 | Data model and FDE solver with PML, validated against analytic results and MPB | done |
 | M2 | Dispersive material library, group index from dispersion | done |
 | M3 | PySide6 GUI: geometry editor, solve, mode table, field viewer, project files | done |
-| M4 | Parameter and wavelength sweeps with mode tracking | |
+| M4 | Parameter and wavelength sweeps with mode tracking | done |
 | M5 | Bend modes, overlaps and coupling, confinement factors | |
 | M6 | Data export, scripting docs, app packaging, CI on Windows/Linux/macOS | |
 

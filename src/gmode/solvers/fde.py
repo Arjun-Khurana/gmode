@@ -13,7 +13,9 @@ H scaled by eta0, Maxwell's curl equations reduce to
 so P Q e = neff^2 e, solved by shift-invert around the target index.
 PML enters as complex coordinate stretching of the derivative operators.
 """
+import hashlib
 import time
+from collections import OrderedDict
 
 import numpy as np
 import pymetis
@@ -57,20 +59,66 @@ def _derivatives(axis: Axis):
     return fwd, bwd
 
 
-def _shift_invert(A, sigma) -> LinearOperator:
-    """(A - sigma I)^-1 via SuperLU, with a METIS nested-dissection ordering.
+_ORDERINGS: "OrderedDict[tuple, tuple]" = OrderedDict()
+_ORDERING_CACHE_SIZE = 4
 
-    On grid operators nested dissection gives about half the fill of SuperLU's
-    default COLAMD ordering, which roughly halves factor and solve times.
+
+_ROUNDOFF = 1e-12  # entries below this fraction of the largest are cancellation residue
+
+
+def _prune_roundoff(A):
+    """Drop entries that are floating-point residue of exact cancellations.
+
+    In uniform regions the mixed differences in P @ Q cancel exactly in exact
+    arithmetic. In floating point they leave ~1e-16 relative residue at some
+    wavelengths but not others, so the sparsity pattern (and the fill of a
+    reused ordering) changed with wavelength; one PML case went from 23M to 120M
+    nonzeros in the factors. Pruning restores the true, wavelength-independent
+    pattern; the change to eigenvalues is at the 1e-12 level.
     """
-    n = A.shape[0]
-    M = (A - sigma * sp.identity(n, format="csc")).tocsc()
-    G = (abs(M) + abs(M.T)).tocsr()
+    if A.nnz:
+        a = np.abs(A.data)
+        A.data[a < _ROUNDOFF * a.max()] = 0
+        A.eliminate_zeros()
+    return A
+
+
+def _ordering(pattern, key=None):
+    """METIS nested-dissection ordering of a sparsity pattern, cached under `key`.
+
+    `pattern` may be a function returning the pattern, evaluated only on a cache miss.
+    """
+    if key is None:
+        pattern = pattern() if callable(pattern) else pattern
+        key = (pattern.shape[0], pattern.nnz,
+               hashlib.blake2b(pattern.indptr.tobytes() + pattern.indices.tobytes(), digest_size=16).digest())
+    if key in _ORDERINGS:
+        _ORDERINGS.move_to_end(key)
+        return _ORDERINGS[key]
+    pattern = pattern() if callable(pattern) else pattern
+    G = (abs(pattern) + abs(pattern.T)).tocsr()
     G.setdiag(0)
     G.eliminate_zeros()
     perm = np.asarray(pymetis.nested_dissection(pymetis.CSRAdjacency(G.indptr, G.indices))[0])
     inv = np.empty_like(perm)
-    inv[perm] = np.arange(n)
+    inv[perm] = np.arange(len(perm))
+    _ORDERINGS[key] = (perm, inv)
+    while len(_ORDERINGS) > _ORDERING_CACHE_SIZE:
+        _ORDERINGS.popitem(last=False)
+    return perm, inv
+
+
+def _shift_invert(A, sigma, key=None, pattern=None) -> LinearOperator:
+    """(A - sigma I)^-1 via SuperLU, with a METIS nested-dissection ordering.
+
+    On grid operators nested dissection gives about half the fill of SuperLU's
+    default COLAMD ordering, which roughly halves factor and solve times. The
+    ordering is computed from `pattern` (the structural pattern; default A's own)
+    and cached under `key`, so solves on the same grid reuse it.
+    """
+    n = A.shape[0]
+    M = (A - sigma * sp.identity(n, format="csc")).tocsc()
+    perm, inv = _ordering(M if pattern is None else pattern, key)
     lu = splu(M[perm][:, perm].tocsc(), permc_spec="NATURAL")
     return LinearOperator((n, n), matvec=lambda b: lu.solve(b[perm])[inv], dtype=M.dtype)
 
@@ -188,7 +236,7 @@ class FDESolver:
         Me, Mh = sp.diags(e_mask), sp.diags(h_mask)
         P = Me @ P @ Mh
         Q = Mh @ Q @ Me
-        A = (P @ Q).tocsc()
+        A = _prune_roundoff((P @ Q).tocsc())
         if not np.any(A.data.imag):
             # lossless without PML: real arithmetic makes the LU several times cheaper
             A = A.real
@@ -199,7 +247,9 @@ class FDESolver:
         k = min(project.solver.num_modes, 2 * N - 2)
         ncv = min(max(2 * k + 1, k + 20), 2 * N)
         sigma = target**2
-        vals, vecs = eigs(A, k=k, sigma=sigma, OPinv=_shift_invert(A, sigma), ncv=ncv,
+        # the matrix pattern is fixed by the grid, boundaries and arithmetic type
+        grid_key = (grid.shape, grid.x.lower, grid.x.upper, grid.y.lower, grid.y.upper, A.dtype.kind)
+        vals, vecs = eigs(A, k=k, sigma=sigma, OPinv=_shift_invert(A, sigma, grid_key), ncv=ncv,
                           v0=np.ones(2 * N, dtype=A.dtype), tol=_EIG_TOL)
         t_eig = time.perf_counter() - t0
 

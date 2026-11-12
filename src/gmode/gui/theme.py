@@ -168,6 +168,7 @@ def style_plot(widget: pg.PlotWidget):
         ax.setTextPen(pg.mkPen(FAINT))
         ax.setStyle(tickFont=font, tickLength=-4)
         ax.label.setFont(font)
+        ax.enableAutoSIPrefix(False)  # units are already in the labels (µm, dB/cm)
     for name in ("top", "right"):
         item.showAxis(name, False)
 
