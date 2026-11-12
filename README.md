@@ -22,6 +22,19 @@ To use the MPB backend, install GMode into an environment that already has meep:
 uv pip install --python /path/to/meep/venv/bin/python -e .
 ```
 
+## Desktop app
+
+```sh
+uv sync --extra gui
+uv run gmode-gui            # or: uv run python -m gmode.gui [project.gmode]
+```
+
+Draw rectangles, circles, sloped ridges and polygons (drag to move, handles to resize, with
+snapping), pick materials from the library or import n,k data, set the domain, mesh,
+boundaries and symmetry in the properties panel, then press F5. Solves run in a separate process,
+so they can be cancelled. Results show the mode list, n_eff, n_g, loss, A_eff and TE fraction,
+and every field component (Re, Im, |.|, dB). Projects save as JSON (`.gmode`), with full undo/redo.
+
 ## Scripting example
 
 ```python
@@ -82,9 +95,12 @@ Lengths are in microns. Time dependence is exp(-iωt), so loss appears as Im(nef
 | M0 | Package scaffolding, tests | done |
 | M1 | Data model and FDE solver with PML, validated against analytic results and MPB | done |
 | M2 | Dispersive material library, group index from dispersion | done |
-| M3 | PySide6 GUI: geometry editor, solve, mode table, field viewer, project files | |
+| M3 | PySide6 GUI: geometry editor, solve, mode table, field viewer, project files | done |
 | M4 | Parameter and wavelength sweeps with mode tracking | |
 | M5 | Bend modes, overlaps and coupling, confinement factors | |
 | M6 | Data export, scripting docs, app packaging, CI on Windows/Linux/macOS | |
+
+Later: importer for the refractiveindex.info database (convert its formula and n,k entries to GMode
+materials, stored by value in the project), Gehrsitz AlGaAs model, anisotropic materials.
 
 The original tkinter + MPB prototype is in `legacy/`.
