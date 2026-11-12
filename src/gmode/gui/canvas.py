@@ -125,6 +125,10 @@ class GeometryCanvas(pg.PlotWidget):
         sym = [f"{ax} {v}" for ax, v in (("x", b.x_symmetry), ("y", b.y_symmetry)) if v != "none"]
         if sym:
             notes.append("symmetry " + ", ".join(sym))
+        s = p.solver
+        if s.bend_radius is not None:
+            side = "-" if s.bend_radius > 0 else "+"
+            notes.append(f"bend R {abs(s.bend_radius):g} µm, center toward {side}{s.bend_radial_axis}")
         label = pg.TextItem("  ·  ".join(notes), color=theme.ACCENT_INK, anchor=(0, 1))
         label.setFont(theme.mono_font(9.5))
         label.setOpacity(0.75)

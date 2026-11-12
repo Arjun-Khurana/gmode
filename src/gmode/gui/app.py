@@ -357,6 +357,11 @@ class MainWindow(QMainWindow):
         for a in (self.act_new, self.act_open):
             m.addAction(a)
         self.recent_menu = m.addMenu("Open Recent")
+        examples = m.addMenu("Open Example")
+        from gmode.examples import catalog
+
+        for name, title in catalog().items():
+            examples.addAction(title, lambda n=name: self.open_example(n))
         m.addSeparator()
         for a in (self.act_save, self.act_save_as):
             m.addAction(a)
@@ -407,7 +412,7 @@ class MainWindow(QMainWindow):
         if res is None or i >= len(res):
             return
         self.viewer.show_mode(i)
-        self.readout.show_mode(res[i])
+        self.readout.show_mode(res[i], res, i)
         self.mode_section.set_caption(f"Mode {i}")
         for widget in (self.modes_list, self.table):
             widget.blockSignals(True)
@@ -438,6 +443,17 @@ class MainWindow(QMainWindow):
             self.doc.replace(default_project())
             self.canvas.fit()
             self.show_geometry()
+
+    def open_example(self, name: str):
+        if not self._confirm_discard():
+            return
+        from gmode.examples import catalog, load
+
+        self.doc.replace(load(name))
+        self.canvas.fit()
+        self.show_geometry()
+        self.doc.select(("project",))
+        self.log_message(f"opened example: {catalog()[name]}")
 
     def open_project(self, path=None):
         if not self._confirm_discard():
@@ -682,7 +698,7 @@ class MainWindow(QMainWindow):
         self.modes_hint.setVisible(not res)
         self.table.set_modes(res)
         self.viewer.set_modes(res)
-        self.readout.show_mode(res[0] if res else None)
+        self.readout.show_mode(res[0] if res else None, res, 0)
         self.mode_section.set_caption("Mode 0" if res else "Mode")
         self.mode_section.setVisible(bool(res))
         self._update_stale()

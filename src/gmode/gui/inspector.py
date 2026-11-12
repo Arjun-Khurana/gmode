@@ -23,13 +23,16 @@ LABELS = {
     "pml_layers": "PML layers", "pml_order": "PML grading order",
     "pml_sigma": "PML σ (empty = auto)", "pml_kappa": "PML κ (empty = σ)",
     "backend": "Backend", "num_modes": "Number of modes", "target_neff": "Target n_eff (empty = auto)",
+    "bend_radius": "Bend radius (µm, empty = straight)", "bend_radial_axis": "Bend radial axis",
+    "bend_location": "Radius measured at (µm, empty = center)",
+    "mfd": "Mode field diameter (µm, empty = off)",
     "description": "Description", "reference": "Reference", "wavelength_range": "Valid range (µm)",
     "n": "n", "k": "k", "a": "a", "terms": "Terms (B, C in µm²)", "power_terms": "Power terms (D, p)",
     "eps_inf": "ε∞", "poles": "Poles (eV)", "x": "Al fraction x", "wavelengths": "Wavelengths",
 }
 META_LAST = {"description", "reference", "wavelength_range"}
 HIDDEN = {"kind", "type", "schema_version", "materials", "structures", "domain", "mesh", "boundaries", "solver",
-          "sweep"}
+          "sweep", "fiber"}
 
 
 def _fmt(v) -> str:
@@ -312,7 +315,7 @@ class ModelForm(QWidget):
 
     edited = Signal(dict)
 
-    def __init__(self, model: BaseModel, choices: dict | None = None, parent=None):
+    def __init__(self, model: BaseModel, choices: dict | None = None, parent=None, hidden=()):
         super().__init__(parent)
         self.model_type = type(model)
         self.choices = choices or {}
@@ -324,7 +327,7 @@ class ModelForm(QWidget):
         fields = list(self.model_type.model_fields.items())
         fields.sort(key=lambda kv: kv[0] in META_LAST)  # stable: model fields first, provenance last
         for name, info in fields:
-            if name in HIDDEN:
+            if name in HIDDEN or name in hidden:
                 continue
             ed = _editor_for(name, info.annotation, lambda v, n=name: self.edited.emit({n: v}), self.choices)
             self.editors[name] = ed
@@ -426,7 +429,8 @@ class InspectorPanel(QWidget):
             return
         if rebuild or key != self._key or self.form is None:
             self._clear()
-            self.form = ModelForm(obj, self._choices())
+            # the project description is shown as wrapped text above the form instead
+            self.form = ModelForm(obj, self._choices(), hidden=("description",) if sel[0] == "project" else ())
             self.form.edited.connect(self._apply)
             self.body.addWidget(self.form)
             self._key = key
@@ -435,7 +439,7 @@ class InspectorPanel(QWidget):
         is_mat = sel[0] == "material"
         kind = {"rectangle": "Rectangle", "circle": "Circle", "polygon": "Polygon"}
         self.title.setText({"project": "Simulation", "domain": "Domain", "mesh": "Mesh", "boundaries": "Boundaries",
-                            "solver": "Solver"}.get(sel[0]) or
+                            "solver": "Solver", "fiber": "Fiber coupling"}.get(sel[0]) or
                            (sel[1] if sel[0] == "material" else f"{obj.name} · {kind.get(obj.type, '')}"))
         self.rename.setVisible(is_mat)
         if is_mat:
@@ -445,11 +449,14 @@ class InspectorPanel(QWidget):
             self.plot.setVisible(True)
             self.plot.show_material(obj, self.doc.project.wavelength)
         else:
-            self.info.setText({
+            self.info.setText(self.doc.project.description if sel[0] == "project" else {
                 "boundaries": "PML layers are added outside the domain. Symmetry planes pass through the "
                               "domain center; pec/pmc there selects the mode parity.",
                 "mesh": "Subpixel samples average the permittivity at material interfaces.",
-                "solver": "Modes are found nearest the target index (default: the largest index present).",
+                "solver": "Modes are found nearest the target index (default: the largest index present; for "
+                          "bends, the straight guide's n_eff).",
+                "fiber": "Reports each mode's coupling to a Gaussian fiber beam at the facet (mode-mismatch "
+                         "overlap; no Fresnel reflection). SMF-28: 10.4 µm, lensed fibers: 2 to 3 µm.",
             }.get(sel[0], ""))
             self.plot.setVisible(False)
 

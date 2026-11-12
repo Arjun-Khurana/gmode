@@ -31,7 +31,8 @@ class ProjectTree(QTreeWidget):
         p = self.doc.project
         sim = QTreeWidgetItem(self, ["Simulation"])
         sim.setData(0, ROLE, ("project",))
-        for key, label in (("domain", "Domain"), ("mesh", "Mesh"), ("boundaries", "Boundaries"), ("solver", "Solver")):
+        for key, label in (("domain", "Domain"), ("mesh", "Mesh"), ("boundaries", "Boundaries"), ("solver", "Solver"),
+                           ("fiber", "Fiber coupling")):
             it = QTreeWidgetItem(sim, [label])
             it.setData(0, ROLE, (key,))
         mats = QTreeWidgetItem(self, [f"Materials ({len(p.materials)})"])

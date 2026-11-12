@@ -461,6 +461,7 @@ gui = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "mpmath" },
     { name = "pytest" },
     { name = "pytest-qt" },
 ]
@@ -479,6 +480,7 @@ provides-extras = ["gui"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "mpmath", specifier = ">=1.4.1" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-qt", specifier = ">=4.5.0" },
 ]
@@ -791,6 +793,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/0f/d9/a1218a31fa2d8082eb893548990ad09a2005ebda1b2b89dad88a8308e51a/matplotlib-3.11.2-pp311-pypy311_pp73-macosx_10_15_x86_64.whl", hash = "sha256:854df8d7dfe9fdffcbaa6f39e44a6c24b409cb4d7561fbc09213b157d833f6a6", size = 9457702, upload-time = "2026-09-11T19:05:22.086Z" },
     { url = "https://files.pythonhosted.org/packages/68/d7/a9fde05d87c3c853f233ec20c5b5c3a1c86035e1ed4bfa397cd54d46ec90/matplotlib-3.11.2-pp311-pypy311_pp73-macosx_11_0_arm64.whl", hash = "sha256:eac4b07d4e3743b172451e122ea964f72f152879d4f9adcf3f3d33e518f12ead", size = 9287753, upload-time = "2026-09-11T19:05:24.677Z" },
     { url = "https://files.pythonhosted.org/packages/ec/79/ea2ae4eab84f011c1dc8145864f78e5a63adda8efb95557ef36cc38e6da2/matplotlib-3.11.2-pp311-pypy311_pp73-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:7ef7a53b66780e5d942923724f08577fbc5be1f7322da0f0f3f9dcaa45dd803d", size = 9848259, upload-time = "2026-09-11T19:05:27.455Z" },
+]
+
+[[package]]
+name = "mpmath"
+version = "1.4.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c5/b0/6de8e78014ff1842a90cc9a56da6ccfb598a5390ed0257fcdb7d9680c18b/mpmath-1.4.1.tar.gz", hash = "sha256:efd6d1b75f09d69524a67609949812668b28e81ecbfe0ab449ced8c13e92642e", size = 2093211, upload-time = "2026-03-15T01:17:38.245Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/13/f2/abeec3db71d221ccd3cd89d206be1fabf5a3ee7178862f5fba23a59607e0/mpmath-1.4.1-py3-none-any.whl", hash = "sha256:dc4f0ea2304480d4a9a48a94c1020571558ade522b44a6912efac63a586e140f", size = 567787, upload-time = "2026-03-15T01:17:36.392Z" },
 ]
 
 [[package]]

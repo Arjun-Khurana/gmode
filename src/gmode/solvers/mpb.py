@@ -87,6 +87,8 @@ class MPBSolver:
     def _check(project: Project):
         if any(np.imag(project.materials[k].eps(project.wavelength)) != 0 for k in project._used_materials()):
             raise ValueError("MPB only supports lossless materials; use the fde backend")
+        if project.solver.bend_radius is not None:
+            raise ValueError("MPB does not support bends; use the fde backend")
         b = project.boundaries
         if {b.x_min, b.x_max, b.y_min, b.y_max} != {"periodic"}:
             warnings.warn("MPB uses periodic boundaries; the project's boundary conditions are ignored")

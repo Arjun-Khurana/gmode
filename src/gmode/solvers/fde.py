@@ -5,13 +5,19 @@ H scaled by eta0, Maxwell's curl equations reduce to
 
     neff [Ex, Ey] = P [Hx, Hy]        neff [Hx, Hy] = Q [Ex, Ey]
 
-    P = [[ -Dxf ez^-1 Dyb,      Dxf ez^-1 Dxb + 1 ],
-         [ -Dyf ez^-1 Dyb - 1,  Dyf ez^-1 Dxb     ]]
-    Q = [[  Dxb Dyf,            -Dxb Dxf - ey     ],
-         [  Dyb Dyf + ex,       -Dyb Dxf          ]]
+    P = [[ -Dxf ez^-1 Dyb,       Dxf ez^-1 Dxb + my ],
+         [ -Dyf ez^-1 Dyb - mx,  Dyf ez^-1 Dxb      ]]
+    Q = [[  Dxb mz^-1 Dyf,       -Dxb mz^-1 Dxf - ey ],
+         [  Dyb mz^-1 Dyf + ex,  -Dyb mz^-1 Dxf      ]]
 
 so P Q e = neff^2 e, solved by shift-invert around the target index.
 PML enters as complex coordinate stretching of the derivative operators.
+
+Bends use the conformal (transformation-optics) map of a circular arc of
+radius R onto a straight guide: with r = R + u along the radial axis and
+h = r / R, the bent guide is a straight one with eps and mu scaled by
+(h, h, 1/h) in (radial, vertical, propagation). neff is referenced to the
+radius R at the domain center, beta = nu / R for fields ~ exp(i nu phi).
 """
 import hashlib
 import time
@@ -184,7 +190,35 @@ def _dual_widths(axis: Axis):
     return w_node, axis.d_fwd
 
 
-def _yee_group_index(grid: Grid, f, eps_group) -> float:
+def _bend_scale(project: Project, grid: Grid):
+    """Scale factor h = 1 + u/R at each Yee location, or None for a straight guide.
+
+    Returns a dict keyed by component name (Ex, Ey, Ez, Hx, Hy, Hz) of (nx, ny) arrays.
+    """
+    R = project.solver.bend_radius
+    if R is None:
+        return None
+    ax = project.solver.bend_radial_axis
+    i = "xy".index(ax)
+    c = project.solver.bend_location
+    if c is None:
+        c = project.domain.center[i]
+    a = grid.x if ax == "x" else grid.y
+    h_node, h_half = 1 + (a.nodes - c) / R, 1 + (a.half - c) / R
+    if min(h_node.min(), h_half.min()) <= 0.05:
+        raise ValueError(f"bend radius {R:g} um is too small for this domain: the grid (including PML) "
+                         f"reaches within {abs(R) * 0.05:g} um of the bend center")
+    nx, ny = grid.shape
+    # position type of each component along (x, y): node or half point
+    where = {"Ex": ("h", "n"), "Ey": ("n", "h"), "Ez": ("n", "n"), "Hx": ("n", "h"), "Hy": ("h", "n"), "Hz": ("h", "h")}
+    out = {}
+    for comp, pos in where.items():
+        h = h_half if pos[i] == "h" else h_node
+        out[comp] = np.broadcast_to(h[:, None] if ax == "x" else h[None, :], (nx, ny)).copy()
+    return out
+
+
+def _yee_group_index(grid: Grid, f, eps_group, mu=None) -> float:
     """c / v_g from the energy and power on the Yee grid itself.
 
     Uses each component at its own location and the same interface-averaged
@@ -199,9 +233,10 @@ def _yee_group_index(grid: Grid, f, eps_group) -> float:
     w_nn = np.outer(gx_n, gy_n)  # Ez at (x, y)
     w_hh = np.outer(gx_h, gy_h)  # Hz at (xh, yh)
     egx, egy, egz = (np.real(e) for e in eps_group)
+    mx, my, mz = mu if mu is not None else (1.0, 1.0, 1.0)
     a2 = lambda a: np.abs(a) ** 2
-    U = np.sum(w_hn * (egx * a2(ex) + a2(hy)) + w_nh * (egy * a2(ey) + a2(hx))
-               + w_nn * egz * a2(ez) + w_hh * a2(hz))
+    U = np.sum(w_hn * (egx * a2(ex) + my * a2(hy)) + w_nh * (egy * a2(ey) + mx * a2(hx))
+               + w_nn * egz * a2(ez) + w_hh * mz * a2(hz))
     P = np.real(np.sum(w_hn * ex * np.conj(hy)) - np.sum(w_nh * ey * np.conj(hx)))
     return float(U / (2 * P))
 
@@ -218,6 +253,17 @@ class FDESolver:
 
         eps_x, eps_y, eps_z = rasterize(project, grid)
         eps_group = rasterize_group(project, grid, (eps_x, eps_y, eps_z))
+        n_max = np.sqrt(np.max(np.real(eps_z)))
+        hs = _bend_scale(project, grid)
+        if hs is None:
+            mu = (np.ones((nx, ny)), np.ones((nx, ny)), np.ones((nx, ny)))
+        else:
+            eps_x, eps_y, eps_z = eps_x * hs["Ex"], eps_y * hs["Ey"], eps_z / hs["Ez"]
+            eg = eps_group
+            eps_group = (eg[0] * hs["Ex"], eg[1] * hs["Ey"], eg[2] / hs["Ez"])
+            mu = (hs["Hx"], hs["Hy"], 1 / hs["Hz"])
+            # keep the straight-guide default target: scaling it by max(h) would aim at the
+            # radiation continuum of the outer cladding, whose index n*h grows with radius
 
         dxf, dxb = _derivatives(grid.x)
         dyf, dyb = _derivatives(grid.y)
@@ -225,12 +271,13 @@ class FDESolver:
         Dxf, Dxb = sp.kron(dxf, Iy) / k0, sp.kron(dxb, Iy) / k0
         Dyf, Dyb = sp.kron(Ix, dyf) / k0, sp.kron(Ix, dyb) / k0
 
-        I = sp.identity(N)
         iez = sp.diags(1 / eps_z.ravel())
-        P = sp.bmat([[-Dxf @ iez @ Dyb, Dxf @ iez @ Dxb + I],
-                     [-Dyf @ iez @ Dyb - I, Dyf @ iez @ Dxb]])
-        Q = sp.bmat([[Dxb @ Dyf, -Dxb @ Dxf - sp.diags(eps_y.ravel())],
-                     [Dyb @ Dyf + sp.diags(eps_x.ravel()), -Dyb @ Dxf]])
+        imz = sp.diags(1 / mu[2].ravel())
+        Mx, My = sp.diags(mu[0].ravel()), sp.diags(mu[1].ravel())
+        P = sp.bmat([[-Dxf @ iez @ Dyb, Dxf @ iez @ Dxb + My],
+                     [-Dyf @ iez @ Dyb - Mx, Dyf @ iez @ Dxb]])
+        Q = sp.bmat([[Dxb @ imz @ Dyf, -Dxb @ imz @ Dxf - sp.diags(eps_y.ravel())],
+                     [Dyb @ imz @ Dyf + sp.diags(eps_x.ravel()), -Dyb @ imz @ Dxf]])
 
         e_mask, h_mask = _pec_masks(grid)
         Me, Mh = sp.diags(e_mask), sp.diags(h_mask)
@@ -242,8 +289,15 @@ class FDESolver:
             A = A.real
 
         target = project.solver.target_neff
-        if target is None:
-            target = np.sqrt(np.max(np.real(eps_z)))
+        if target is None and hs is not None:
+            # In a bend the outer cladding's index n*h grows with radius and can exceed the core
+            # index, so aiming at the largest index lands in the radiation continuum. The bend
+            # mode stays close to the straight guide's, so aim there.
+            straight = project.model_copy(update={"solver": project.solver.model_copy(
+                update={"bend_radius": None, "num_modes": 1})})
+            target = float(self.solve(straight)[0].neff.real)
+        elif target is None:
+            target = n_max
         k = min(project.solver.num_modes, 2 * N - 2)
         ncv = min(max(2 * k + 1, k + 20), 2 * N)
         sigma = target**2
@@ -255,22 +309,27 @@ class FDESolver:
 
         neffs = np.sqrt(vals.astype(complex))
         order = np.argsort(-neffs.real)
-        modes = [self._fields(project, grid, eps_z, eps_group, Q, Dxf, Dxb, Dyf, Dyb, neffs[i], vecs[:, i])
+        modes = [self._fields(project, grid, eps_z, eps_group, mu, hs, Q, Dxf, Dxb, Dyf, Dyb, neffs[i], vecs[:, i])
                  for i in order]
         for m in modes:
             m.meta.update(backend="fde", grid_shape=grid.shape, solve_time=t_eig)
+            if project.solver.bend_radius is not None:
+                m.meta.update(bend_radius=project.solver.bend_radius, bend_radial_axis=project.solver.bend_radial_axis)
         return ModeSet(modes, project.model_copy(deep=True), "fde")
 
-    def _fields(self, project, grid, eps_z, eps_group, Q, Dxf, Dxb, Dyf, Dyb, neff, e):
+    def _fields(self, project, grid, eps_z, eps_group, mu, hs, Q, Dxf, Dxb, Dyf, Dyb, neff, e):
         nx, ny = grid.shape
         N = nx * ny
         h = Q @ e / neff
         ex, ey = e[:N], e[N:]
         hx, hy = h[:N], h[N:]
         ez = 1j * (Dxb @ hy - Dyb @ hx) / eps_z.ravel()
-        hz = -1j * (Dxf @ ey - Dyf @ ex)
+        hz = -1j * (Dxf @ ey - Dyf @ ex) / mu[2].ravel()
         f = [a.reshape(nx, ny) for a in (ex, ey, ez, hx, hy, hz)]
-        ng = _yee_group_index(grid, f, eps_group)
+        ng = _yee_group_index(grid, f, eps_group, mu)
+        if hs is not None:
+            # the solved longitudinal components are covariant (h E_s, h H_s); report physical ones
+            f[2], f[5] = f[2] / hs["Ez"], f[5] / hs["Hz"]
 
         # interpolate everything to cell centres (xh, yh)
         gx, gy = grid.x, grid.y

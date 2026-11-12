@@ -79,6 +79,35 @@ modes, so a tracked mode can't drop out of the search window when another mode c
 desktop app, the Sweep view (F6) plots any tracked quantity, and clicking a point opens that step's
 fields.
 
+## Bends, coupling and confinement
+
+```python
+# bend: radius measured at the waveguide (x = 0); extend the domain on the outside and use PML
+p.solver.bend_radius, p.solver.bend_location = 2.0, 0.0
+m = p.solve()[0]
+m.bend_loss_db_per_90deg
+
+ms.confinement(0, "core")        # Gamma for gain/absorption (Visser et al.), by structure or material
+ms.power_fraction(0, "core")     # share of the guided power
+gm.gaussian_coupling(m, 5.2)     # into SMF-28 (waist = MFD/2), mode mismatch only
+gm.overlap(a, b)                 # power overlap of two modes, e.g. butt coupling
+gm.coupling_length(even, odd)    # directional coupler, from its supermodes
+```
+
+Bends use the conformal transformation (scaled eps and mu on the Yee grid) and are checked
+against the exact complex-order Bessel solution of a curved slab: n_eff to 2e-4, loss to 3%.
+
+## Examples
+
+`gm.examples.load(name)` returns a ready project; the desktop app lists them under
+File > Open Example, and `python -m gmode.examples ./examples` writes them all as `.gmode` files.
+Most are validation cases whose description states the independent reference:
+the Si strip (published compact model), a Si wire (MPB), an Si slab (exact), a leaky SiN slab
+over silicon (exact, 271 dB/cm), a curved slab (exact Bessel solution), a width sweep through a
+mode crossing, a wavelength sweep for n_g and dispersion, a strip bend, a directional coupler,
+a fiber edge coupler (inverse taper tip), a rib, a SiN strip, a GaAs/AlGaAs ridge and a
+thin-film LiNbO3 ridge.
+
 ## Materials
 
 | Model | Use |
@@ -121,7 +150,7 @@ Lengths are in microns. Time dependence is exp(-iωt), so loss appears as Im(nef
 | M2 | Dispersive material library, group index from dispersion | done |
 | M3 | PySide6 GUI: geometry editor, solve, mode table, field viewer, project files | done |
 | M4 | Parameter and wavelength sweeps with mode tracking | done |
-| M5 | Bend modes, overlaps and coupling, confinement factors | |
+| M5 | Bend modes, overlaps and coupling, confinement factors | done |
 | M6 | Data export, scripting docs, app packaging, CI on Windows/Linux/macOS | |
 
 Later: importer for the refractiveindex.info database (convert its formula and n,k entries to GMode

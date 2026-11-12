@@ -72,6 +72,29 @@ class SolverSettings(BaseModel):
     num_modes: int = Field(4, ge=1)
     # modes are searched around this effective index; None uses the largest index in the domain
     target_neff: Optional[float] = None
+    # Bends: radius in microns, None for a straight guide. Along bend_radial_axis the radius is
+    # r = R + (u - bend_location), so positive R puts the bend center on the -u side and modes
+    # shift toward +u. neff is referenced to radius R, i.e. to the coordinate bend_location
+    # (default: the domain center); set it to the waveguide's position. Bend radiation leaves
+    # through the outer side, so extend the domain there (several microns) and use PML.
+    bend_radius: Optional[float] = None
+    bend_radial_axis: Literal["x", "y"] = "x"
+    bend_location: Optional[float] = None
+
+    @model_validator(mode="after")
+    def _check_bend(self):
+        if self.bend_radius is not None and self.bend_radius == 0:
+            raise ValueError("bend_radius must be nonzero (None for a straight guide)")
+        return self
+
+
+class FiberSettings(BaseModel):
+    """A Gaussian fiber beam to report coupling against (mode-mismatch overlap at the facet)."""
+
+    # mode field diameter in microns (1/e^2 intensity), e.g. 10.4 for SMF-28 at 1550 nm,
+    # 2.5 for a lensed fiber; None turns the report off
+    mfd: Optional[float] = Field(None, gt=0)
+    center: tuple[float, float] = (0.0, 0.0)
 
 
 class SweepSettings(BaseModel):
@@ -95,6 +118,7 @@ class Project(BaseModel):
 
     schema_version: int = SCHEMA_VERSION
     name: str = "untitled"
+    description: str = ""
     wavelength: float = Field(1.55, gt=0)
     materials: dict[str, Material]
     background: str
@@ -105,6 +129,7 @@ class Project(BaseModel):
     boundaries: Boundaries = Boundaries()
     solver: SolverSettings = SolverSettings()
     sweep: SweepSettings = SweepSettings()
+    fiber: FiberSettings = FiberSettings()
 
     @field_validator("materials", mode="before")
     @classmethod
@@ -113,6 +138,14 @@ class Project(BaseModel):
         if isinstance(v, dict):
             return {k: (material(m) if isinstance(m, str) else m) for k, m in v.items()}
         return v
+
+    @model_validator(mode="after")
+    def _check_bend_symmetry(self):
+        s = self.solver
+        if s.bend_radius is not None and getattr(self.boundaries, f"{s.bend_radial_axis}_symmetry") != "none":
+            raise ValueError(f"a bend breaks the mirror symmetry along {s.bend_radial_axis}; "
+                             f"set {s.bend_radial_axis}_symmetry to none")
+        return self
 
     @model_validator(mode="after")
     def _check_materials(self):
@@ -130,6 +163,28 @@ class Project(BaseModel):
         for s in self.structures:
             out[s.contains(x, y)] = values[s.material]
         return out
+
+    def owner_at(self, x, y) -> np.ndarray:
+        """Index of the topmost structure at each point, or -1 for the background."""
+        x, y = np.broadcast_arrays(np.asarray(x, float), np.asarray(y, float))
+        owner = np.full(x.shape, -1)
+        for i, s in enumerate(self.structures):
+            owner[s.contains(x, y)] = i
+        return owner
+
+    def region_mask(self, region: str, x, y) -> np.ndarray:
+        """Points belonging to `region`: a structure name (where it is the topmost structure)
+        or a material name (wherever that material is visible, background included)."""
+        owner = self.owner_at(x, y)
+        names = [s.name for s in self.structures]
+        if region in names:
+            if names.count(region) > 1:
+                raise ValueError(f"more than one structure is named {region!r}")
+            return owner == names.index(region)
+        if region in self.materials:
+            mats = np.array([s.material for s in self.structures] + [self.background])
+            return mats[owner] == region  # owner -1 picks the background (last entry)
+        raise ValueError(f"no structure or material named {region!r}")
 
     def eps_at(self, x, y, wavelength: Optional[float] = None) -> np.ndarray:
         """Relative permittivity sampled at points (no interface averaging)."""

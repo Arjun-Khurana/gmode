@@ -21,6 +21,7 @@ gui = ["PySide6>=6.6", "pyqtgraph>=0.13"]
 
 [dependency-groups]
 dev = [
+    "mpmath>=1.4.1",
     "pytest>=8",
     "pytest-qt>=4.5.0",
 ]

@@ -17,7 +17,7 @@ from gmode.results import ModeSet
 # selection keys: ("project",), ("domain",), ("mesh",), ("boundaries",), ("solver",),
 # ("material", name), ("structure", index), or None
 Selection = Optional[tuple]
-SECTIONS = ("domain", "mesh", "boundaries", "solver")
+SECTIONS = ("domain", "mesh", "boundaries", "solver", "fiber")
 
 
 def default_project() -> Project:

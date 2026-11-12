@@ -94,6 +94,32 @@ class Mode:
     def loss_db_per_cm(self) -> float:
         return _DB * self.k0 * np.imag(self.neff) * 1e4
 
+    def power_fraction(self, mask) -> float:
+        """Fraction of the guided power (z Poynting flux) flowing through the points in `mask`."""
+        Sz = np.real(self.E[0] * np.conj(self.H[1]) - self.E[1] * np.conj(self.H[0]))
+        return float(np.sum((Sz * self.dA)[mask]) / np.sum(Sz * self.dA))
+
+    def confinement_factor(self, mask) -> float:
+        """Confinement factor for gain and absorption in the points in `mask`.
+
+        Gamma = integral_region n |E|^2 dA / integral Re(E x H*) . z dA (Visser et al., 1997),
+        so modal gain = Gamma * material gain. It accounts for the slow-down of the mode and
+        can exceed 1 in high-contrast guides, unlike the power fraction.
+        """
+        n = np.sqrt(np.real(self.eps)).real
+        num = np.sum((n * np.sum(np.abs(self.E) ** 2, 0) * self.dA)[mask])
+        return float(num / (2 * self.power))
+
+    @property
+    def bend_radius(self) -> Optional[float]:
+        return self.meta.get("bend_radius")
+
+    @property
+    def bend_loss_db_per_90deg(self) -> Optional[float]:
+        """Loss over a quarter turn at the reference radius, for bend modes."""
+        R = self.bend_radius
+        return None if R is None else self.loss_db_per_cm * (np.pi / 2 * abs(R)) * 1e-4
+
     @property
     def te_fraction(self) -> float:
         """Fraction of transverse electric energy in Ex (Lumerical's definition)."""
@@ -145,6 +171,18 @@ class ModeSet:
     @property
     def neff(self) -> np.ndarray:
         return np.array([m.neff for m in self.modes])
+
+    def _mask(self, i: int, region: str):
+        m = self.modes[i]
+        return self.project.region_mask(region, m.x[:, None], m.y[None, :])
+
+    def confinement(self, i: int, region: str) -> float:
+        """Confinement factor of mode i in a structure or material (see Mode.confinement_factor)."""
+        return self.modes[i].confinement_factor(self._mask(i, region))
+
+    def power_fraction(self, i: int, region: str) -> float:
+        """Fraction of mode i's power in a structure or material."""
+        return self.modes[i].power_fraction(self._mask(i, region))
 
     def table(self) -> str:
         rows = [f"{'#':>2}  {'neff':>10}  {'Im(neff)':>10}  {'loss dB/cm':>10}  {'TE frac':>7}  {'ng':>7}  {'Aeff um2':>8}"]
