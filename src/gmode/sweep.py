@@ -186,6 +186,24 @@ class SweepResult:
         dng = np.gradient(self.group_index, lam, axis=0, edge_order=2)  # 1/m
         return dng / C0 * 1e6  # s/m^2 -> ps/(nm km)
 
+    def save(self, path):
+        """Write the tracked quantities to a compressed .npz file (fields are not included)."""
+        from .io import save_sweep
+
+        return save_sweep(self, path)
+
+    @classmethod
+    def load(cls, path) -> "SweepResult":
+        from .io import load_sweep
+
+        return load_sweep(path)
+
+    def to_csv(self, path):
+        """Long-format CSV: one row per step and track (plus D for wavelength sweeps)."""
+        from .io import sweep_to_csv
+
+        return sweep_to_csv(self, path)
+
     def table(self) -> str:
         head = f"{self.label:>18}" + "".join(f"  {'n_eff ' + str(t):>12}" for t in range(self.n_tracks))
         rows = [head]

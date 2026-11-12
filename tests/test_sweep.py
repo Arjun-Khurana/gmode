@@ -106,6 +106,8 @@ def test_cutoff_leaves_track_empty_and_custom_setter():
 def test_ordering_cache_reused():
     from gmode.solvers import fde
 
+    if fde.pymetis is None:
+        pytest.skip("pymetis not installed (the fallback ordering is not cached)")
     fde._ORDERINGS.clear()
     p = wire(num_modes=1, dx=0.04)
     p.solve()
