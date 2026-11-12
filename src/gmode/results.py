@@ -184,6 +184,24 @@ class ModeSet:
         """Fraction of mode i's power in a structure or material."""
         return self.modes[i].power_fraction(self._mask(i, region))
 
+    def save(self, path):
+        """Write every mode (fields included) and the project to a compressed .npz file."""
+        from .io import save_modes
+
+        return save_modes(self, path)
+
+    @classmethod
+    def load(cls, path) -> "ModeSet":
+        from .io import load_modes
+
+        return load_modes(path)
+
+    def to_csv(self, path):
+        """One row per mode: n_eff, loss, n_g, TE fraction, A_eff (and bend loss / fiber coupling if set)."""
+        from .io import modes_to_csv
+
+        return modes_to_csv(self, path)
+
     def table(self) -> str:
         rows = [f"{'#':>2}  {'neff':>10}  {'Im(neff)':>10}  {'loss dB/cm':>10}  {'TE frac':>7}  {'ng':>7}  {'Aeff um2':>8}"]
         for i, m in enumerate(self.modes):

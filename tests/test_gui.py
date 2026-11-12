@@ -303,3 +303,23 @@ def test_sweep_runner_pool_and_cancel(qtbot):
         assert not r.busy
     finally:
         r.shutdown()
+
+
+def test_export_and_reopen_results(window, qtbot, tmp_path):
+    w = window
+    w.open_example("si_strip")
+    w.solve()
+    qtbot.waitUntil(lambda: w.doc.results is not None, timeout=60_000)
+    csv_path = w.export("modes_csv", tmp_path / "m.csv")
+    npz_path = w.export("modes_npz", tmp_path / "m.npz")
+    assert csv_path.read_text().startswith("mode,wavelength_um,neff_real")
+    for view in ("Geometry", "Fields"):
+        w.view_seg.setCurrentText(view)
+        png = w.export("image", str(tmp_path / f"{view}.png"))
+        assert png.stat().st_size > 5000
+    neff = w.doc.results[0].neff
+    w.doc.set_results(None)
+    w.open_results(str(npz_path))
+    assert w.doc.results[0].neff == neff and w.modes_list.count() == len(w.doc.results)
+    w._update_export_actions()
+    assert w.act_export_csv.isEnabled() and not w.act_export_sweep_csv.isEnabled()

@@ -8,12 +8,14 @@ A graphical waveguide mode solver, in the spirit of Lumerical FDE and the Tidy3D
 - **MPB backend** (optional): MIT Photonic Bands, for cross-checking and periodic problems.
   It needs the `meep` package, which is not on PyPI.
 
+The [scripting guide](docs/scripting.md) covers the whole Python API.
+
 ## Install
 
 ```sh
 uv sync                 # core + tests
-uv sync --extra gui     # + PySide6 GUI (in progress)
-uv run pytest
+uv sync --extra gui     # + the desktop app
+uv run --extra gui pytest
 ```
 
 To use the MPB backend, install GMode into an environment that already has meep:
@@ -34,6 +36,15 @@ snapping), pick materials from the library or import n,k data, set the domain, m
 boundaries and symmetry in the properties panel, then press F5. Solves run in a separate process,
 so they can be cancelled. Results show the mode list, n_eff, n_g, loss, A_eff and TE fraction,
 and every field component (Re, Im, |.|, dB). Projects save as JSON (`.gmode`), with full undo/redo.
+File > Export writes the mode table or sweep as CSV, the modes with all fields as `.npz`
+(File > Open Results reads them back), and the current plot as PNG.
+
+To build a standalone app (`dist/GMode.app` on macOS, `dist/GMode/` elsewhere):
+
+```sh
+uv run --extra gui --with pyinstaller pyinstaller packaging/gmode.spec --noconfirm
+dist/GMode.app/Contents/MacOS/GMode --self-test     # solves an example in a worker process
+```
 
 ## Scripting example
 
@@ -52,7 +63,9 @@ p = gm.Project(
 )
 modes = p.solve()
 print(modes.table())
-p.save("si_wire.json")
+p.save("si_wire.gmode")
+modes.save("si_wire_modes.npz")    # fields + project; gm.ModeSet.load reads it back
+modes.to_csv("si_wire_modes.csv")
 ```
 
 ## Sweeps
@@ -151,9 +164,16 @@ Lengths are in microns. Time dependence is exp(-iωt), so loss appears as Im(nef
 | M3 | PySide6 GUI: geometry editor, solve, mode table, field viewer, project files | done |
 | M4 | Parameter and wavelength sweeps with mode tracking | done |
 | M5 | Bend modes, overlaps and coupling, confinement factors | done |
-| M6 | Data export, scripting docs, app packaging, CI on Windows/Linux/macOS | |
+| M6 | Data export, scripting docs, app packaging, CI on Windows/Linux/macOS | done |
 
 Later: importer for the refractiveindex.info database (convert its formula and n,k entries to GMode
-materials, stored by value in the project), Gehrsitz AlGaAs model, anisotropic materials.
+materials, stored by value in the project), Gehrsitz AlGaAs model, anisotropic materials,
+an optional multithreaded sparse solver (MUMPS).
+
+## Development
+
+Tests: `uv run --extra gui pytest` (GUI tests run headless; the MPB tests run where meep is
+installed). CI (`.github/workflows/ci.yml`) runs the suite and the app self-test on Linux,
+macOS and Windows with Python 3.10 and 3.12.
 
 The original tkinter + MPB prototype is in `legacy/`.

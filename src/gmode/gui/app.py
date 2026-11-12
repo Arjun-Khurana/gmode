@@ -362,9 +362,19 @@ class MainWindow(QMainWindow):
 
         for name, title in catalog().items():
             examples.addAction(title, lambda n=name: self.open_example(n))
+        m.addAction("Open Results (.npz)...", self.open_results)
         m.addSeparator()
         for a in (self.act_save, self.act_save_as):
             m.addAction(a)
+        exp = m.addMenu("Export")
+        self.act_export_csv = exp.addAction("Modes as CSV...", lambda: self.export("modes_csv"))
+        self.act_export_npz = exp.addAction("Modes with fields (.npz)...", lambda: self.export("modes_npz"))
+        exp.addSeparator()
+        self.act_export_sweep_csv = exp.addAction("Sweep as CSV...", lambda: self.export("sweep_csv"))
+        self.act_export_sweep_npz = exp.addAction("Sweep (.npz)...", lambda: self.export("sweep_npz"))
+        exp.addSeparator()
+        exp.addAction("Plot image (PNG)...", lambda: self.export("image"))
+        exp.aboutToShow.connect(self._update_export_actions)
         m.addSeparator()
         m.addAction(self.act_quit)
         m = mb.addMenu("&Edit")
@@ -443,6 +453,74 @@ class MainWindow(QMainWindow):
             self.doc.replace(default_project())
             self.canvas.fit()
             self.show_geometry()
+
+    def _update_export_actions(self):
+        has_modes = self.doc.results is not None and len(self.doc.results) > 0
+        has_sweep = self.sweep_result is not None and len(self.sweep_result.values) > 0
+        for a in (self.act_export_csv, self.act_export_npz):
+            a.setEnabled(has_modes)
+        for a in (self.act_export_sweep_csv, self.act_export_sweep_npz):
+            a.setEnabled(has_sweep)
+
+    def _current_plot(self):
+        view = self.view_seg.currentText()
+        return {"Geometry": self.canvas, "Fields": self.viewer.plot, "Sweep": self.sweep_view.plot}[view]
+
+    def export(self, what: str, path: str | None = None):
+        """Write results or the current plot. With `path`, no dialog is shown (scripts and tests)."""
+        name = self.doc.project.name
+        spec = {
+            "modes_csv": (f"{name}_modes.csv", "CSV (*.csv)"),
+            "modes_npz": (f"{name}_modes.npz", "NumPy archive (*.npz)"),
+            "sweep_csv": (f"{name}_sweep.csv", "CSV (*.csv)"),
+            "sweep_npz": (f"{name}_sweep.npz", "NumPy archive (*.npz)"),
+            "image": (f"{name}_{self.view_seg.currentText().lower()}.png", "PNG image (*.png)"),
+        }[what]
+        interactive = path is None
+        if interactive:
+            path, _ = QFileDialog.getSaveFileName(self, "Export", str(Path(self._last_dir()) / spec[0]), spec[1])
+            if not path:
+                return None
+        try:
+            if what == "modes_csv":
+                out = self.doc.results.to_csv(path)
+            elif what == "modes_npz":
+                out = self.doc.results.save(path)
+            elif what == "sweep_csv":
+                out = self.sweep_result.to_csv(path)
+            elif what == "sweep_npz":
+                out = self.sweep_result.save(path)
+            else:
+                import pyqtgraph.exporters as pex
+
+                # pyqtgraph's SVG exporter fails on image items, so plots export as PNG only
+                item = self._current_plot().getPlotItem()
+                exporter = pex.ImageExporter(item)
+                exporter.parameters()["width"] = 2 * int(item.width())  # 2x for crisp figures
+                exporter.export(str(path))
+                out = Path(path)
+        except Exception as e:  # report I/O problems instead of crashing the window
+            if not interactive:
+                raise
+            QMessageBox.critical(self, "Export failed", f"{path}\n\n{e}")
+            return None
+        self.log_message(f"exported {out}")
+        self.statusBar().showMessage(f"Exported {out}", 4000)
+        return out
+
+    def open_results(self, path=None):
+        if path is None:
+            path, _ = QFileDialog.getOpenFileName(self, "Open results", self._last_dir(), "NumPy archive (*.npz)")
+            if not path:
+                return
+        try:
+            res = gm.ModeSet.load(path)
+        except Exception as e:
+            QMessageBox.critical(self, "Could not open results", f"{path}\n\n{e}")
+            return
+        self.doc.set_results(res)
+        self.status.setText(f"results from {Path(path).name}  ·  {len(res)} modes")
+        self.log_message(f"opened results {path} (project {res.project.name!r})")
 
     def open_example(self, name: str):
         if not self._confirm_discard():
@@ -722,12 +800,54 @@ class MainWindow(QMainWindow):
         ev.accept()
 
 
+def _self_test(app) -> int:
+    """Open an example, solve it in a real worker process, check TE0, and quit (for built apps and CI)."""
+    import tempfile
+
+    settings = QSettings(str(Path(tempfile.mkdtemp()) / "self-test.ini"), QSettings.Format.IniFormat)
+    win = MainWindow(settings=settings)
+    outcome = {"code": 2}
+
+    def finished(modes, _warnings):
+        neff = modes[0].neff.real
+        ok = abs(neff - 2.45004) < 2e-3
+        print(f"self-test: TE0 neff {neff:.5f} ({'ok' if ok else 'unexpected'}), "
+              f"solved in a worker process in {modes[0].meta.get('solve_time', 0):.2f} s", flush=True)
+        outcome["code"] = 0 if ok else 1
+        win.doc.undo_stack.setClean()
+        app.quit()
+
+    def failed(message, tb):
+        print(f"self-test: solve failed: {message}\n{tb}", flush=True)
+        outcome["code"] = 1
+        app.quit()
+
+    win.runner.finished.connect(finished)
+    win.runner.failed.connect(failed)
+    win.show()
+    QTimer.singleShot(0, lambda: (win.open_example("si_strip"), win.solve()))
+    QTimer.singleShot(180_000, app.quit)  # give up after 3 minutes
+    app.exec()
+    win.runner.shutdown()
+    return outcome["code"]
+
+
 def main(argv=None):
-    argv = sys.argv if argv is None else argv
+    import multiprocessing
+    import os
+
+    multiprocessing.freeze_support()  # frozen apps: solver workers must not start another window
+    argv = list(sys.argv if argv is None else argv)
+    self_test = "--self-test" in argv
+    if self_test:
+        argv.remove("--self-test")
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     app = QApplication.instance() or QApplication(argv)
     app.setApplicationName("GMode")
     app.setOrganizationName("GMode")
     theme.apply(app)
+    if self_test:
+        return _self_test(app)
     win = MainWindow()
     if len(argv) > 1:
         win.open_project(argv[1])
