@@ -1,9 +1,13 @@
 import json
 import svgwrite
 import meep as mp
+import numpy as np
 import tkinter as tk
+from tkinter import ttk
 from index import calc_modes
 from functools import partial
+from PIL import Image, ImageTk
+from matplotlib import pyplot as plt
 from tkinter import filedialog, simpledialog, Toplevel
 
 PX_PER_UM = 100
@@ -12,7 +16,7 @@ class WaveguideDrawer:
     def __init__(self, root):
         self.root = root
         self.root.title("Waveguide Mode Solver")
-        self.root.geometry("800x600")
+        self.root.geometry("300x300")
         self.root.resizable(True, True)  # Allow window resizing
         
         self.canvas = tk.Canvas(root, bg="white")
@@ -38,7 +42,6 @@ class WaveguideDrawer:
         
         manual_button = tk.Button(btn_frame, text="Add Rectangle", command=self.add_rectangle_manually)
         manual_button.pack(side=tk.LEFT, padx=5)
-        
         self.draw_grid()
     
     def get_color(self, id):
@@ -198,16 +201,36 @@ class WaveguideDrawer:
             pass  # Handle invalid inputs gracefully
 
     def serialize(self):
-        with open('test.json', 'w') as f:
-            json.dump(
-                {
-                    'window': (self.canvas.winfo_width(), self.canvas.winfo_height()),
-                    'rectangles': self.rectangles
-                },
-                f
-            )
-        
-        calc_modes('test.json')
+        # with open('test.json', 'w') as f:
+        #     json.dump(
+        #         {
+        #             'window': (self.canvas.winfo_width(), self.canvas.winfo_height()),
+        #             'rectangles': self.rectangles
+        #         },
+        #         f
+        #     )
+        calc = tk.Toplevel(self.root)
+        calc.title("Calculating Modes")
+        calc.geometry("250x300")
+        # progress = ttk.Progressbar(calc, mode='indeterminate')
+        # progress.pack()
+        # progress.start()
+        efields, hfields = calc_modes('test.json')
+        # print(np.shape(efields))
+        # progress.destroy()
+        efield_power = np.asarray(efields[:,:,0,0]**2 + efields[:,:,0,1]**2 + efields[:,:,0,2]**2, dtype=np.uint8)
+        # print(np.shape(efield_power))
+        # tk_img = ImageTk.PhotoImage(file='mmgc_glass_second_mode_black.png')
+        img = Image.fromarray(efield_power, mode='L')
+        tk_img = ImageTk.PhotoImage(img)
+        label = tk.Label(calc)
+        label.config(image=tk_img)
+        label.image = tk_img
+        # label.image = tk_img
+        # print(img)
+        # img_frame = tk.Frame(calc).pack()
+        label.pack()
+
 
     def save_as_svg(self):
         file_path = filedialog.asksaveasfilename(defaultextension=".svg", filetypes=[("SVG files", "*.svg")])
