@@ -16,6 +16,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       QT_QPA_PLATFORM: offscreen  # GUI tests and the self-test run without a display
+      PYTHONFAULTHANDLER: "1"     # print a traceback if anything aborts, even at shutdown
     steps:
       - uses: actions/checkout@v4
 
