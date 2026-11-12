@@ -38,17 +38,17 @@ def calc_modes(file: str):
 
     sim = mp.Simulation(
         cell_size = mp.Vector3(window_x/PX_PER_UM,window_y/PX_PER_UM),
-        resolution=32,
+        resolution=64,
         geometry=geometry
     )
-    sim.plot2D()
-    if mp.am_really_master(): plt.show()
+    # sim.plot2D()
+    # if mp.am_really_master(): plt.show()
     # return
 
     ms = mpb.ModeSolver(
         geometry_lattice=mp.Lattice(size=mp.Vector3(window_x/PX_PER_UM,window_y/PX_PER_UM,0)),
         geometry=geometry,
-        resolution=32,
+        resolution=64,
         num_bands=num_bands,
         target_freq=omega,
         # tolerance=1e-4
@@ -61,9 +61,11 @@ def calc_modes(file: str):
 
 
     efields = np.real(ms.get_efield(1, bloch_phase=False))
+    hfields = np.real(ms.get_hfield(1, bloch_phase=False))
     if mp.am_really_master():
-        plt.imshow(np.rot90(efields[:,:,0,0]))
+        plt.imshow(np.rot90(efields[:,:,0,0]**2 + efields[:,:,0,1]**2 + efields[:,:,0,2]**2))
         plt.show()
+    return efields, hfields
     # print(ms.freqs)
     # print(k)
 
