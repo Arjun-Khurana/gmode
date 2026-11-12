@@ -800,6 +800,19 @@ class MainWindow(QMainWindow):
         ev.accept()
 
 
+def _dispose(widget):
+    """Destroy a window while the QApplication still exists.
+
+    Left to interpreter shutdown, Qt objects can be freed twice (Python's collector and
+    Qt's teardown in no defined order), which aborts on Linux.
+    """
+    from PySide6.QtCore import QCoreApplication, QEvent
+
+    widget.close()
+    widget.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
 def _self_test(app) -> int:
     """Open an example, solve it in a real worker process, check TE0, and quit (for built apps and CI)."""
     import tempfile
@@ -829,6 +842,7 @@ def _self_test(app) -> int:
     QTimer.singleShot(180_000, app.quit)  # give up after 3 minutes
     app.exec()
     win.runner.shutdown()
+    _dispose(win)
     return outcome["code"]
 
 
@@ -852,7 +866,9 @@ def main(argv=None):
     if len(argv) > 1:
         win.open_project(argv[1])
     win.show()
-    return app.exec()
+    code = app.exec()
+    _dispose(win)
+    return code
 
 
 if __name__ == "__main__":

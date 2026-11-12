@@ -28,7 +28,7 @@ def window(qtbot, tmp_path):
     yield w
     w.doc.undo_stack.setClean()  # closing must not open a "save changes?" dialog
     w.close()
-    w.deleteLater()
+    w.deleteLater()  # processed by conftest after the test, while the QApplication is alive
 
 
 def type_into(qtbot, line_edit, text):

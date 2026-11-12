@@ -24,8 +24,12 @@ import time
 from collections import OrderedDict
 
 import numpy as np
-import pymetis
 import scipy.sparse as sp
+
+try:  # optional: METIS nested dissection (no Windows wheels); SuperLU's MMD ordering is the fallback
+    import pymetis
+except ImportError:
+    pymetis = None
 from scipy.sparse.linalg import LinearOperator, eigs, splu
 
 from ..grid import Axis, Grid, build_axis, rasterize, rasterize_group
@@ -114,17 +118,22 @@ def _ordering(pattern, key=None):
     return perm, inv
 
 
-def _shift_invert(A, sigma, key=None, pattern=None) -> LinearOperator:
-    """(A - sigma I)^-1 via SuperLU, with a METIS nested-dissection ordering.
+def _shift_invert(A, sigma, key=None) -> LinearOperator:
+    """(A - sigma I)^-1 via SuperLU with a fill-reducing ordering.
 
-    On grid operators nested dissection gives about half the fill of SuperLU's
-    default COLAMD ordering, which roughly halves factor and solve times. The
-    ordering is computed from `pattern` (the structural pattern; default A's own)
-    and cached under `key`, so solves on the same grid reuse it.
+    With pymetis installed the ordering is METIS nested dissection, cached under
+    `key` so solves on the same grid reuse it. Without it (no Windows wheels),
+    SuperLU's minimum degree ordering on A^T + A is used: 2 to 8 percent more fill
+    on these operators and no separate ordering step, so single solves run at
+    about the same speed. SuperLU's default COLAMD would double the fill. The
+    choice affects speed only, never results.
     """
     n = A.shape[0]
     M = (A - sigma * sp.identity(n, format="csc")).tocsc()
-    perm, inv = _ordering(M if pattern is None else pattern, key)
+    if pymetis is None:
+        lu = splu(M, permc_spec="MMD_AT_PLUS_A")
+        return LinearOperator((n, n), matvec=lu.solve, dtype=M.dtype)
+    perm, inv = _ordering(M, key)
     lu = splu(M[perm][:, perm].tocsc(), permc_spec="NATURAL")
     return LinearOperator((n, n), matvec=lambda b: lu.solve(b[perm])[inv], dtype=M.dtype)
 

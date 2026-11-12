@@ -10,7 +10,7 @@ dependencies = [
     "scipy>=1.10",
     "pydantic>=2.5",
     "matplotlib>=3.7",
-    "pymetis>=2025.2.2",
+    "pymetis>=2025.2.2; sys_platform != 'win32'",  # optional speedup; no Windows wheels
 ]
 
 [project.scripts]

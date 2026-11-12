@@ -218,3 +218,14 @@ def test_project_json_roundtrip(tmp_path):
 def test_unknown_material_rejected():
     with pytest.raises(ValueError, match="unknown material"):
         gm.Project(materials=mats(a=1.0), background="a", structures=[gm.Rectangle(material="b", size=(1, 1))])
+
+
+def test_solver_without_pymetis_gives_same_modes(monkeypatch):
+    """pymetis is optional (no Windows wheels); the SuperLU fallback ordering changes speed, not results."""
+    from gmode.solvers import fde
+
+    p = si_wire(dx=0.04, x_min="pml", x_max="pml", y_min="pml", y_max="pml")
+    with_metis = p.solve()
+    monkeypatch.setattr(fde, "pymetis", None)
+    without = p.solve()
+    assert without.neff == pytest.approx(with_metis.neff, abs=1e-10)
