@@ -128,11 +128,11 @@ def _cell_bounds(axis: Axis, at_half: bool):
     return h - axis.d_bwd, h
 
 
-def _average(project: Project, xb, yb, s: int, harmonic_axis, wavelength=None):
+def _sample_average(project: Project, xb, yb, s: int, harmonic_axis, wavelength=None):
     """Average eps over the cells xb x yb with s*s samples each.
 
-    Interfaces normal to `harmonic_axis` ("x", "y" or None) are averaged
-    harmonically (normal component of D continuous), all others arithmetically.
+    Within a cell: arithmetic along y, then harmonic along x for harmonic_axis
+    "x" (and the transpose for "y"); arithmetic over both for None.
     """
     t = (np.arange(s) + 0.5) / s
     xs = xb[0][:, None] + (xb[1] - xb[0])[:, None] * t  # (Nx, s)
@@ -151,6 +151,65 @@ def _average(project: Project, xb, yb, s: int, harmonic_axis, wavelength=None):
         else:
             out[i0 : i0 + rows] = e.mean(axis=(2, 3))
     return out
+
+
+def _structure_edges(project: Project, axis: int) -> np.ndarray:
+    """Coordinates along `axis` of the axis-aligned edges of all structures.
+
+    Rectangle sides and polygon vertices; curved and slanted boundaries are left to sampling.
+    """
+    out = []
+    for st in project.structures:
+        if st.type == "rectangle":
+            b = st.bounds()
+            out += [b[axis], b[axis + 2]]
+        elif st.type == "polygon":
+            out += [v[axis] for v in st.vertices]
+    return np.asarray(out, float)
+
+
+def _refine(bounds, edges):
+    """Split the contiguous cells `bounds` = (lo, hi) at structure edges.
+
+    Returns the sub-interval bounds, the parent cell of each, and its fraction of the parent width.
+    """
+    lo, hi = bounds
+    b = np.append(lo, hi[-1])
+    tol = 1e-9 * max(1.0, float(b[-1] - b[0]))
+    inner = edges[(edges > b[0] + tol) & (edges < b[-1] - tol)]
+    pts = np.unique(np.concatenate([b, inner]))
+    pts = pts[np.concatenate([[True], np.diff(pts) > tol])]
+    r_lo, r_hi = pts[:-1], pts[1:]
+    parent = np.clip(np.searchsorted(b, 0.5 * (r_lo + r_hi)) - 1, 0, len(lo) - 1)
+    frac = (r_hi - r_lo) / (hi - lo)[parent]
+    starts = np.flatnonzero(np.diff(np.concatenate([[-1], parent])))
+    return (r_lo, r_hi), frac, starts
+
+
+def _average(project: Project, xb, yb, s: int, harmonic_axis, wavelength=None):
+    """Interface-averaged eps over the cells xb x yb (each a contiguous (lo, hi) partition).
+
+    Interfaces normal to `harmonic_axis` ("x", "y" or None) are averaged harmonically
+    (normal D continuous), the others arithmetically. Cells are first split at every
+    axis-aligned structure edge, so rectangles and the horizontal or vertical sides of
+    polygons are integrated exactly: the result converges smoothly with the mesh and no
+    longer depends on where an interface falls inside a cell. Curved and slanted edges are
+    sampled s x s within the sub-cells they cross. s = 1 means no averaging (staircase).
+    """
+    if s == 1:
+        return _sample_average(project, xb, yb, 1, harmonic_axis, wavelength)
+    rxb, fx, sx = _refine(xb, _structure_edges(project, 0))
+    ryb, fy, sy = _refine(yb, _structure_edges(project, 1))
+    # sub-cells bounded by straight axis-aligned edges hold one material: one sample suffices
+    inner = 1 if all(st.type == "rectangle" for st in project.structures) else s
+    e = _sample_average(project, rxb, ryb, inner, harmonic_axis, wavelength)  # (rx, ry)
+    if harmonic_axis == "x":
+        col = np.add.reduceat(fy[None, :] * e, sy, axis=1)  # arithmetic along y
+        return 1 / np.add.reduceat(fx[:, None] / col, sx, axis=0)  # harmonic along x
+    if harmonic_axis == "y":
+        row = np.add.reduceat(fx[:, None] * e, sx, axis=0)
+        return 1 / np.add.reduceat(fy[None, :] / row, sy, axis=1)
+    return np.add.reduceat(np.add.reduceat(fx[:, None] * fy[None, :] * e, sy, axis=1), sx, axis=0)
 
 
 def rasterize(project: Project, grid: Grid, wavelength=None):

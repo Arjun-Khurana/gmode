@@ -3,8 +3,8 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt, QTimer
-from PySide6.QtGui import QAction, QFont, QKeySequence
+from PySide6.QtCore import QEvent, QObject, QSettings, Qt, QTimer
+from PySide6.QtGui import QAction, QFont, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QApplication, QDockWidget, QFileDialog, QGridLayout, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
     QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QSplitter, QStackedWidget, QVBoxLayout, QWidget,
@@ -846,6 +846,20 @@ def _self_test(app) -> int:
     return outcome["code"]
 
 
+class _FileOpenFilter(QObject):
+    """macOS delivers a double-clicked or dropped .gmode file as a FileOpen event, not in argv."""
+
+    def __init__(self, win):
+        super().__init__()
+        self.win = win
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.FileOpen and event.file():
+            self.win.open_project(event.file())
+            return True
+        return False
+
+
 def main(argv=None):
     import multiprocessing
     import os
@@ -859,14 +873,18 @@ def main(argv=None):
     app = QApplication.instance() or QApplication(argv)
     app.setApplicationName("GMode")
     app.setOrganizationName("GMode")
+    app.setWindowIcon(QIcon(str(Path(__file__).with_name("icon.png"))))
     theme.apply(app)
     if self_test:
         return _self_test(app)
     win = MainWindow()
-    if len(argv) > 1:
+    opener = _FileOpenFilter(win)
+    app.installEventFilter(opener)
+    if len(argv) > 1 and not argv[1].startswith("-psn_"):  # old macOS launchers pass a process serial number
         win.open_project(argv[1])
     win.show()
     code = app.exec()
+    app.removeEventFilter(opener)  # no FileOpen may reach the window while it is torn down
     _dispose(win)
     return code
 

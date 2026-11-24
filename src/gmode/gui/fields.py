@@ -114,6 +114,10 @@ class FieldViewer(QWidget):
         self.caption.setParentItem(self.plot.getPlotItem().vb)
         self.caption.setPos(10, 6)
         self._outlines = []
+        # one-cell-wide domains (slabs) give a 1-D field: drawn as a profile, not a 1-pixel image
+        self.profile = pg.PlotDataItem(pen=pg.mkPen(theme.ACCENT_INK, width=1.6))
+        self.plot.addItem(self.profile)
+        self._profile_mode = None
         lay.addWidget(self.plot)
         self.placeholder = QLabel("solve (F5) to see mode fields")
         self.placeholder.setObjectName("hint")
@@ -151,9 +155,16 @@ class FieldViewer(QWidget):
         comp = self.component.currentText()
         self.part.setEnabled(comp in ("Ex", "Ey", "Ez", "Hx", "Hy", "Hz"))
         f, signed, label = mode_image(m, comp, self.PART_KEYS[self.part.currentText()], self.log.isChecked())
-        dx, dy = m.x[1] - m.x[0], m.y[1] - m.y[0]
+        imag = f" {m.neff.imag:+.2e}i" if abs(m.neff.imag) > 1e-12 else ""
+        self.caption.setText(f"mode {self.index}  ·  {label}  ·  n_eff {m.neff.real:.6f}{imag}")
+        if 1 in f.shape:
+            self._draw_profile(m, f, label, along="y" if f.shape[0] == 1 else "x")
+            return
+        self._set_profile_mode(None)
+        # pixel edges from the stored cell widths (also correct for a single sample)
+        x0, y0 = m.x[0] - m.dx[0] / 2, m.y[0] - m.dy[0] / 2
         self.image.setImage(f, autoLevels=False)
-        self.image.setRect(QRectF(m.x[0] - dx / 2, m.y[0] - dy / 2, len(m.x) * dx, len(m.y) * dy))
+        self.image.setRect(QRectF(x0, y0, float(np.sum(m.dx)), float(np.sum(m.dy))))
         if signed:
             v = float(np.abs(f).max()) or 1.0
             self.cbar.setColorMap(theme.field_colormap())
@@ -162,10 +173,40 @@ class FieldViewer(QWidget):
             lo, hi = float(np.min(f)), float(np.max(f))
             self.cbar.setColorMap(theme.index_colormap() if comp == "n" else theme.magnitude_colormap())
             self.cbar.setLevels((lo, hi if hi > lo else lo + 1))
-        imag = f" {m.neff.imag:+.2e}i" if abs(m.neff.imag) > 1e-12 else ""
-        self.caption.setText(f"mode {self.index}  ·  {label}  ·  n_eff {m.neff.real:.6f}{imag}")
         if self.outline.isChecked() and comp != "n":
             self._draw_outlines()
+
+    def _set_profile_mode(self, along):
+        """Switch between the 2-D image (along=None) and a 1-D profile along x or y."""
+        if along == self._profile_mode:
+            return
+        self._profile_mode = along
+        two_d = along is None
+        self.image.setVisible(two_d)
+        self.cbar.setVisible(two_d)
+        self.plot.setAspectLocked(two_d)
+        if two_d:
+            self.profile.setData([], [])
+            self.plot.setLabel("bottom", "x (µm)")
+            self.plot.setLabel("left", "y (µm)")
+        self.plot.enableAutoRange()
+
+    def _draw_profile(self, m, f, label, along):
+        self._set_profile_mode(along)
+        coord = m.y if along == "y" else m.x
+        self.profile.setData(coord, np.ravel(f))
+        self.plot.setLabel("bottom", f"{along} (µm)")
+        self.plot.setLabel("left", label)
+        if self.outline.isChecked():
+            pen = pg.mkPen((255, 255, 255, 90), width=1, style=Qt.PenStyle.DashLine)
+            lo, hi = coord.min(), coord.max()
+            for s in self.modes.project.structures:
+                b = s.bounds()
+                for edge in ((b[1], b[3]) if along == "y" else (b[0], b[2])):
+                    if lo < edge < hi:  # interfaces inside the domain
+                        line = pg.InfiniteLine(edge, angle=90, pen=pen)
+                        self.plot.addItem(line, ignoreBounds=True)
+                        self._outlines.append(line)
 
     def _draw_outlines(self):
         pen = pg.mkPen((255, 255, 255, 190), width=1.2)

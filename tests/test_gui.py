@@ -193,6 +193,25 @@ def test_save_and_open(window, tmp_path):
     assert len(doc.project.structures) == 1 and doc.path == path
 
 
+def test_macos_file_open_event_opens_the_project(window, tmp_path):
+    from PySide6.QtGui import QFileOpenEvent
+    from PySide6.QtWidgets import QApplication
+
+    from gmode.gui.app import _FileOpenFilter
+
+    path = tmp_path / "double-clicked.gmode"
+    gm.Project(materials={"a": gm.ConstantMaterial(n=1.5)}, background="a",
+               structures=[gm.Rectangle(material="a", size=(0.2, 0.2))]).save(path)
+    app = QApplication.instance()
+    opener = _FileOpenFilter(window)
+    app.installEventFilter(opener)
+    try:
+        QApplication.sendEvent(app, QFileOpenEvent(str(path)))
+    finally:
+        app.removeEventFilter(opener)
+    assert window.doc.path == path and len(window.doc.project.structures) == 1
+
+
 def test_subprocess_solver_and_cancel(qtbot):
     """The real runner: solves in a worker process and can be cancelled mid-solve."""
     from gmode.gui.solver import SolveRunner
@@ -323,3 +342,26 @@ def test_export_and_reopen_results(window, qtbot, tmp_path):
     assert w.doc.results[0].neff == neff and w.modes_list.count() == len(w.doc.results)
     w._update_export_actions()
     assert w.act_export_csv.isEnabled() and not w.act_export_sweep_csv.isEnabled()
+
+
+def test_viewer_shows_slab_modes_as_profiles(window, qtbot):
+    """One-cell-wide domains (slab examples) give 1-D fields; the viewer plots a profile instead of crashing."""
+    w = window
+    for name, along in (("si_slab", "y"), ("leaky_sin_on_si", "y")):
+        w.open_example(name)
+        w.solve()
+        qtbot.waitUntil(lambda: w.doc.results is not None and w.doc.results.project.name == gm.examples.load(name).name,
+                        timeout=60_000)
+        v = w.viewer
+        assert v._profile_mode == along and not v.image.isVisible()
+        x, y = v.profile.getData()
+        assert len(x) > 100 and np.all(np.isfinite(y))
+        for comp in ("|E|", "Ex", "Ey", "Sz", "n"):
+            v.component.setCurrentText(comp)
+        v.log.setChecked(True)
+        v.log.setChecked(False)
+        assert len(v._outlines) >= 2  # the film's two interfaces
+    w.open_example("si_strip")
+    w.solve()
+    qtbot.waitUntil(lambda: w.doc.results is not None and w.doc.results.project.name == "si_strip", timeout=60_000)
+    assert w.viewer._profile_mode is None and w.viewer.image.isVisible()
