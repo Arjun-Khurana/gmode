@@ -25,7 +25,9 @@ class Domain(BaseModel):
 class Mesh(BaseModel):
     dx: float = Field(0.02, gt=0)
     dy: float = Field(0.02, gt=0)
-    # samples per cell edge used to average eps at material interfaces (1 = no averaging)
+    # interface averaging: 1 = none (staircase). Otherwise straight axis-aligned edges
+    # (rectangles, horizontal/vertical polygon sides) are integrated exactly and curved or
+    # slanted edges are sampled subpixel x subpixel within the cells they cross.
     subpixel: int = Field(4, ge=1)
 
 
