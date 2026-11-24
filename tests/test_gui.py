@@ -193,6 +193,25 @@ def test_save_and_open(window, tmp_path):
     assert len(doc.project.structures) == 1 and doc.path == path
 
 
+def test_macos_file_open_event_opens_the_project(window, tmp_path):
+    from PySide6.QtGui import QFileOpenEvent
+    from PySide6.QtWidgets import QApplication
+
+    from gmode.gui.app import _FileOpenFilter
+
+    path = tmp_path / "double-clicked.gmode"
+    gm.Project(materials={"a": gm.ConstantMaterial(n=1.5)}, background="a",
+               structures=[gm.Rectangle(material="a", size=(0.2, 0.2))]).save(path)
+    app = QApplication.instance()
+    opener = _FileOpenFilter(window)
+    app.installEventFilter(opener)
+    try:
+        QApplication.sendEvent(app, QFileOpenEvent(str(path)))
+    finally:
+        app.removeEventFilter(opener)
+    assert window.doc.path == path and len(window.doc.project.structures) == 1
+
+
 def test_subprocess_solver_and_cancel(qtbot):
     """The real runner: solves in a worker process and can be cancelled mid-solve."""
     from gmode.gui.solver import SolveRunner

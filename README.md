@@ -39,12 +39,17 @@ and every field component (Re, Im, |.|, dB). Projects save as JSON (`.gmode`), w
 File > Export writes the mode table or sweep as CSV, the modes with all fields as `.npz`
 (File > Open Results reads them back), and the current plot as PNG.
 
-To build a standalone app (`dist/GMode.app` on macOS, `dist/GMode/` elsewhere):
+Installers for macOS (`.dmg`), Windows (`setup.exe`) and Linux (`.AppImage`) are attached to each
+[GitHub release](https://github.com/Arjun-Khurana/gmode/releases). To build this platform's
+installer locally (into `dist/release/`), and check that the packaged app solves an example:
 
 ```sh
-uv run --extra gui --with pyinstaller pyinstaller packaging/gmode.spec --noconfirm
-dist/GMode.app/Contents/MacOS/GMode --self-test     # solves an example in a worker process
+uv run --extra gui --with pyinstaller --with pillow python packaging/build.py --test
 ```
+
+To make a release, set `version` in `pyproject.toml`, commit, and push a matching tag
+(`git tag v0.2.0 && git push origin v0.2.0`). The release workflow builds and self-tests the
+installers on all three systems and attaches them, plus the wheel, to a draft release to publish.
 
 ## Scripting example
 
